@@ -4,11 +4,10 @@ export interface ScannedPage {
   uri: string;
   width?: number;
   height?: number;
-  rotation: number; // Keep rotation
+  rotation: number; 
   // REMOVED: mode
 }
 
-// Global Store (Simple Array)
 export let currentSessionPages: ScannedPage[] = [];
 
 export const addPageToSession = (page: Omit<ScannedPage, 'rotation'>) => {

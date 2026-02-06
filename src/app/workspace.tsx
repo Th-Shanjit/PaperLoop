@@ -6,16 +6,16 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImageManipulator from 'expo-image-manipulator'; // <--- NEW IMPORT
 import { 
   getSessionPages, 
   removePageFromSession, 
-  updatePageInSession, // <--- NEW
-  swapPagesInSession,  // <--- NEW
+  updatePageInSession, 
+  swapPagesInSession, 
   clearSession,
   ScannedPage 
 } from '../core/store/session';
 import { transcribeHandwriting } from '../core/services/gemini';
-import * as ImageManipulator from 'expo-image-manipulator';
 
 export default function WorkspaceScreen() {
   const router = useRouter();
@@ -46,32 +46,24 @@ export default function WorkspaceScreen() {
       const newPages = [...getSessionPages()];
       setPages(newPages);
       
-      // If we deleted the last page, close modal. Otherwise show the new page at this index.
       if (newPages.length === 0) {
         setSelectedImage(null);
       } else if (selectedIndex >= newPages.length) {
-        // We deleted the last item, step back
         const newIndex = newPages.length - 1;
         setSelectedIndex(newIndex);
         setSelectedImage(newPages[newIndex]);
       } else {
-        // We deleted a middle item, stay at current index (which is now the next item)
         setSelectedImage(newPages[selectedIndex]);
       }
     }
   };
 
-  // --- NEW ACTIONS ---
-
   const handleRotate = () => {
     if (selectedImage && selectedIndex > -1) {
       const newRotation = (selectedImage.rotation + 90) % 360;
-      // 1. Update Global Store
       updatePageInSession(selectedIndex, { rotation: newRotation });
-      // 2. Update Local State
       const updatedPage = { ...selectedImage, rotation: newRotation };
       setSelectedImage(updatedPage);
-      
       const newPages = [...pages];
       newPages[selectedIndex] = updatedPage;
       setPages(newPages);
@@ -80,56 +72,40 @@ export default function WorkspaceScreen() {
 
   const handleMovePage = (direction: 'left' | 'right') => {
     if (selectedIndex === -1) return;
-    
     const newIndex = direction === 'left' ? selectedIndex - 1 : selectedIndex + 1;
-    
-    // Boundary checks
     if (newIndex < 0 || newIndex >= pages.length) return;
-
-    // 1. Swap in Global Store
     swapPagesInSession(selectedIndex, newIndex);
-    
-    // 2. Update Local State
-    const newPages = [...getSessionPages()]; // Get fresh order
+    const newPages = [...getSessionPages()]; 
     setPages(newPages);
-    setSelectedIndex(newIndex); // Update index to follow the image
-    // Note: selectedImage stays the same object, just at a new index
+    setSelectedIndex(newIndex); 
   };
 
-  // -------------------
-
+  // --- REPLACED: NEW ANALYZE FUNCTION ---
   const handleAnalyze = async () => {
     if (pages.length === 0) return;
     setIsAnalyzing(true);
     
     try {
-      // 1. Get Gemini Data (Now with Coordinates)
-      // Note: We need to pass width/height to Gemini service now.
-      // For MVP, let's assume standard dimensions or fetch them.
-      // Ideally, store 'width'/'height' in 'pages' state when taking photo.
-      // For now, let's pass the pages as is, and we will handle dimensions in the crop step.
-      
-      const result = await transcribeHandwriting(pages.map(p => ({...p, width: 1080, height: 1920}))); // Approximation for now
+      // Step A: Get Data from Gemini
+      const result = await transcribeHandwriting(pages);
       
       const processedQuestions = [];
 
-      // 2. THE CROP LOOP
+      // Step B: The Cropping Loop
       for (const q of result.questions) {
         let finalQ = { ...q };
 
+        // If Gemini says "There is a diagram here"
         if (q.has_diagram && q.box_2d && q.pageUri) {
           try {
-            // Convert Gemini [ymin, xmin, ymax, xmax] (0-1000) to Pixels
-            // We need real image dimensions. 
-            // We'll calculate them dynamically during the crop.
-            
-            // Fetch actual image size first to be accurate
+            // Get real image size
             const { width: imgW, height: imgH } = await new Promise((resolve) => {
                  Image.getSize(q.pageUri, (w, h) => resolve({width: w, height: h}), () => resolve({width: 1000, height: 1000}));
             }) as any;
 
             const [ymin, xmin, ymax, xmax] = q.box_2d;
             
+            // Calculate Crop Rectangle
             const cropConfig = {
               originX: (xmin / 1000) * imgW,
               originY: (ymin / 1000) * imgH,
@@ -137,13 +113,14 @@ export default function WorkspaceScreen() {
               height: ((ymax - ymin) / 1000) * imgH
             };
 
-            // Perform Crop
+            // Perform the Cut
             const cropResult = await ImageManipulator.manipulateAsync(
               q.pageUri,
               [{ crop: cropConfig }],
               { compress: 1, format: ImageManipulator.SaveFormat.PNG }
             );
 
+            // Save the new image URI to the question object
             finalQ.diagramUri = cropResult.uri;
             console.log("Cropped Diagram:", cropResult.uri);
 
@@ -154,7 +131,7 @@ export default function WorkspaceScreen() {
         processedQuestions.push(finalQ);
       }
 
-      // 3. Go to Editor
+      // Step C: Go to Editor with the cropped images
       router.push({
         pathname: "/editor",
         params: { initialData: JSON.stringify(processedQuestions) }
@@ -168,23 +145,12 @@ export default function WorkspaceScreen() {
     }
   };
 
-  const handleExit = () => {
-    Alert.alert("Exit Workspace?", "Unsaved scans will be lost.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Exit", style: "destructive", onPress: () => { clearSession(); router.replace("/"); } }
-    ]);
-  };
-
   const renderItem = ({ item, index }: { item: ScannedPage, index: number }) => (
     <TouchableOpacity onPress={() => handleImagePress(item, index)} style={styles.card}>
-      {/* Apply Rotation to Thumbnail */}
       <Image 
         source={{ uri: item.uri }} 
         style={[styles.thumbnail, { transform: [{ rotate: `${item.rotation}deg` }] }]} 
       />
-      {item.mode && <View style={styles.badge}><Text style={styles.badgeText}>MATH</Text></View>}
-      
-      {/* Page Number Badge */}
       <View style={styles.pageNumberBadge}>
         <Text style={styles.pageNumberText}>{index + 1}</Text>
       </View>
@@ -219,7 +185,7 @@ export default function WorkspaceScreen() {
         <FlatList
           data={pages}
           renderItem={renderItem}
-          keyExtractor={(item, index) => `${index}-${item.uri}`} // Force re-render on swap
+          keyExtractor={(item, index) => `${index}-${item.uri}`} 
           numColumns={2}
           contentContainerStyle={styles.grid}
           columnWrapperStyle={{ gap: 12 }}
@@ -237,25 +203,18 @@ export default function WorkspaceScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* --- MODAL --- */}
       <Modal visible={!!selectedImage} transparent={true} animationType="fade">
         <View style={styles.modalContainer}>
           <TouchableOpacity style={styles.modalBackdrop} onPress={() => setSelectedImage(null)} />
-          
           <View style={styles.modalContent}>
             {selectedImage && (
               <Image 
                 source={{ uri: selectedImage.uri }} 
-                // Apply Rotation to Full View
                 style={[styles.fullImage, { transform: [{ rotate: `${selectedImage.rotation}deg` }] }]} 
                 resizeMode="contain" 
               />
             )}
-            
-            {/* MODAL CONTROLS */}
             <View style={styles.modalControls}>
-              
-              {/* TOP ROW: Title & Swap Controls */}
               <View style={styles.modalHeaderControl}>
                  <TouchableOpacity 
                    onPress={() => handleMovePage('left')} 
@@ -264,9 +223,7 @@ export default function WorkspaceScreen() {
                  >
                    <Ionicons name="arrow-back" size={20} color="white" />
                  </TouchableOpacity>
-
                  <Text style={styles.modalTitle}>Page {selectedIndex + 1}</Text>
-
                  <TouchableOpacity 
                    onPress={() => handleMovePage('right')} 
                    disabled={selectedIndex === pages.length - 1}
@@ -275,24 +232,17 @@ export default function WorkspaceScreen() {
                    <Ionicons name="arrow-forward" size={20} color="white" />
                  </TouchableOpacity>
               </View>
-
-              {/* BOTTOM ROW: Actions */}
               <View style={styles.modalActionRow}>
                 <TouchableOpacity onPress={() => setSelectedImage(null)} style={styles.controlBtn}>
                   <Ionicons name="close" size={24} color="white" />
                 </TouchableOpacity>
-
-                {/* ROTATE BUTTON */}
                 <TouchableOpacity onPress={handleRotate} style={styles.controlBtn}>
                   <Ionicons name="refresh" size={24} color="white" />
                 </TouchableOpacity>
-                
-                {/* DELETE BUTTON */}
                 <TouchableOpacity onPress={handleDeletePage} style={[styles.controlBtn, {backgroundColor:'#EF4444'}]}>
                   <Ionicons name="trash" size={22} color="white" />
                 </TouchableOpacity>
               </View>
-
             </View>
           </View>
         </View>
@@ -315,26 +265,19 @@ const styles = StyleSheet.create({
   grid: { padding: 16, paddingBottom: 120 },
   card: { flex: 1, height: 220, borderRadius: 12, backgroundColor: '#E5E7EB', overflow: 'hidden', marginBottom: 12 },
   thumbnail: { width: '100%', height: '100%', resizeMode: 'cover' },
-  badge: { position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  badgeText: { color: '#fbbf24', fontSize: 10, fontWeight: 'bold' },
   pageNumberBadge: { position: 'absolute', bottom: 8, left: 8, backgroundColor: 'rgba(0,0,0,0.6)', width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
   pageNumberText: { color: 'white', fontSize: 12, fontWeight: 'bold' },
-  
   fabContainer: { position: 'absolute', bottom: 30, right: 20, flexDirection: 'row', alignItems: 'center', gap: 16 },
   analyzeBtn: { backgroundColor: '#fbbf24', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, height: 56, borderRadius: 28, elevation: 4 },
   analyzeText: { fontWeight: 'bold', fontSize: 16, color: 'black' },
   cameraFab: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#2563EB', justifyContent: 'center', alignItems: 'center', elevation: 4 },
-  
   modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject },
   modalContent: { width: '100%', height: '100%', justifyContent: 'center' },
   fullImage: { flex: 1, width: '100%' },
-  
-  // New Modal Controls Layout
   modalControls: { position: 'absolute', bottom: 40, left: 20, right: 20 },
   modalHeaderControl: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 20, gap: 20 },
   modalActionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(50,50,50,0.9)', borderRadius: 50, padding: 10, paddingHorizontal: 20 },
-  
   miniBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
   controlBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
   modalTitle: { color: 'white', fontWeight: 'bold', fontSize: 18 },

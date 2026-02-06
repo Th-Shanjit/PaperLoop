@@ -1,6 +1,7 @@
 import axios from 'axios';
 import * as FileSystem from 'expo-file-system/legacy'; 
 
+// Use Stable 1.5 Flash for reliability
 const MODEL_ID = 'gemini-1.5-flash'; 
 
 interface ScannedPage {
@@ -46,7 +47,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
     const page = pages[i];
     const base64Data = await convertUriToBase64(page.uri);
     
-    // UNIVERSAL PROMPT (No Modes)
+    // NEW HYBRID PROMPT: "Don't describe diagrams. Just locate them."
     const masterPrompt = `
       Analyze this handwritten exam page.
       
@@ -86,6 +87,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
       const data = extractJSON(rawText);
 
       if (data.questions) {
+        // Tag each question with the source URI so we can crop it later
         const tagged = data.questions.map((q: any) => ({
             ...q,
             pageUri: page.uri, 

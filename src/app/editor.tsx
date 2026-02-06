@@ -8,9 +8,8 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system/legacy'; // Needed for Base64 injection
+import * as FileSystem from 'expo-file-system/legacy'; 
 
-// --- TYPES ---
 interface Question {
   id: string;
   number: string;
@@ -82,11 +81,8 @@ export default function EditorScreen() {
     setQuestions(newQs);
   };
 
-  // --- PDF ENGINE ---
   const handleExport = async () => {
     try {
-      // 1. Convert all diagram URIs to Base64 to ensure they render in PDF
-      // This fixes the "[blank]" issue
       const processedQuestions = await Promise.all(questions.map(async (q) => {
         if (q.diagramUri) {
           try {
@@ -97,7 +93,6 @@ export default function EditorScreen() {
         return q;
       }));
 
-      // 2. HTML Template with "CamScanner" CSS
       const html = `
         <html>
           <head>
@@ -107,22 +102,17 @@ export default function EditorScreen() {
               .school-name { font-size: 22px; font-weight: 800; text-transform: uppercase; margin-bottom: 5px; }
               .exam-title { font-size: 18px; margin-bottom: 10px; }
               .meta-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 12px; }
-              
               .instructions { background: #f0f0f0; padding: 15px; font-style: italic; font-size: 12px; margin-bottom: 30px; border-left: 4px solid #333; }
-
               .q-item { margin-bottom: 30px; page-break-inside: avoid; }
               .q-row { display: flex; flex-direction: row; }
               .q-num { width: 30px; font-weight: bold; flex-shrink: 0; }
               .q-content { flex: 1; }
               .q-text { white-space: pre-wrap; line-height: 1.5; margin-bottom: 10px; }
               .q-marks { width: 40px; text-align: right; font-weight: bold; }
-
-              /* THE CAMSCANNER EFFECT */
               .diagram-img {
                 max-width: 100%;
                 max-height: 300px;
                 border: 1px solid #ddd;
-                /* High Contrast + Grayscale to remove shadow/yellow paper */
                 filter: grayscale(100%) contrast(150%) brightness(110%);
                 mix-blend-mode: multiply; 
               }
@@ -134,9 +124,7 @@ export default function EditorScreen() {
               <div class="exam-title">${header.title}</div>
               <div class="meta-row"><span>Duration: ${header.duration}</span><span>Marks: ${header.totalMarks}</span></div>
             </div>
-            
             ${header.instructions ? `<div class="instructions"><strong>Instructions:</strong><br/>${header.instructions}</div>` : ''}
-
             <div class="list">
               ${processedQuestions.map(q => `
                 <div class="q-item">
@@ -175,7 +163,6 @@ export default function EditorScreen() {
       </View>
       <TextInput style={styles.bodyInput} value={item.text} onChangeText={t => updateQuestion(item.id, 'text', t)} multiline placeholder="Question text..." scrollEnabled={false} />
       
-      {/* DIAGRAM PREVIEW (No filter here, so user sees original) */}
       {item.diagramUri && (
         <View style={styles.diagramContainer}>
           <Text style={styles.diagramLabel}>Attached Diagram:</Text>
