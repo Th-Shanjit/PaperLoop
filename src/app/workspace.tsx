@@ -15,6 +15,7 @@ import {
   ScannedPage 
 } from '../core/store/session';
 import { transcribeHandwriting } from '../core/services/gemini';
+import * as ImageManipulator from 'expo-image-manipulator';
 
 export default function WorkspaceScreen() {
   const router = useRouter();
@@ -100,14 +101,68 @@ export default function WorkspaceScreen() {
   const handleAnalyze = async () => {
     if (pages.length === 0) return;
     setIsAnalyzing(true);
+    
     try {
-      const result = await transcribeHandwriting(pages);
+      // 1. Get Gemini Data (Now with Coordinates)
+      // Note: We need to pass width/height to Gemini service now.
+      // For MVP, let's assume standard dimensions or fetch them.
+      // Ideally, store 'width'/'height' in 'pages' state when taking photo.
+      // For now, let's pass the pages as is, and we will handle dimensions in the crop step.
+      
+      const result = await transcribeHandwriting(pages.map(p => ({...p, width: 1080, height: 1920}))); // Approximation for now
+      
+      const processedQuestions = [];
+
+      // 2. THE CROP LOOP
+      for (const q of result.questions) {
+        let finalQ = { ...q };
+
+        if (q.has_diagram && q.box_2d && q.pageUri) {
+          try {
+            // Convert Gemini [ymin, xmin, ymax, xmax] (0-1000) to Pixels
+            // We need real image dimensions. 
+            // We'll calculate them dynamically during the crop.
+            
+            // Fetch actual image size first to be accurate
+            const { width: imgW, height: imgH } = await new Promise((resolve) => {
+                 Image.getSize(q.pageUri, (w, h) => resolve({width: w, height: h}), () => resolve({width: 1000, height: 1000}));
+            }) as any;
+
+            const [ymin, xmin, ymax, xmax] = q.box_2d;
+            
+            const cropConfig = {
+              originX: (xmin / 1000) * imgW,
+              originY: (ymin / 1000) * imgH,
+              width: ((xmax - xmin) / 1000) * imgW,
+              height: ((ymax - ymin) / 1000) * imgH
+            };
+
+            // Perform Crop
+            const cropResult = await ImageManipulator.manipulateAsync(
+              q.pageUri,
+              [{ crop: cropConfig }],
+              { compress: 1, format: ImageManipulator.SaveFormat.PNG }
+            );
+
+            finalQ.diagramUri = cropResult.uri;
+            console.log("Cropped Diagram:", cropResult.uri);
+
+          } catch (e) {
+            console.error("Crop Failed", e);
+          }
+        }
+        processedQuestions.push(finalQ);
+      }
+
+      // 3. Go to Editor
       router.push({
         pathname: "/editor",
-        params: { initialData: JSON.stringify(result.questions) }
+        params: { initialData: JSON.stringify(processedQuestions) }
       });
+
     } catch (e) {
-      Alert.alert("Analysis Failed", "Check connection.");
+      Alert.alert("Analysis Failed", "Please try again.");
+      console.error(e);
     } finally {
       setIsAnalyzing(false);
     }
