@@ -1,28 +1,26 @@
-// src/core/store/session.ts
+import { create } from 'zustand';
 
 export interface ScannedPage {
   uri: string;
-  mode: boolean; 
-  rotation: number; // <--- NEW: 0, 90, 180, 270
+  width?: number;
+  height?: number;
+  rotation: number; // Keep rotation
+  // REMOVED: mode
 }
 
+// Global Store (Simple Array)
 export let currentSessionPages: ScannedPage[] = [];
 
-// Helper to add a page (Initialize rotation to 0)
 export const addPageToSession = (page: Omit<ScannedPage, 'rotation'>) => {
   currentSessionPages.push({ ...page, rotation: 0 });
 };
 
-// ... (keep existing exports) ...
-
-// NEW: Helper to update a specific page (for rotation)
 export const updatePageInSession = (index: number, updates: Partial<ScannedPage>) => {
   if (index > -1 && index < currentSessionPages.length) {
     currentSessionPages[index] = { ...currentSessionPages[index], ...updates };
   }
 };
 
-// NEW: Helper to swap two pages
 export const swapPagesInSession = (indexA: number, indexB: number) => {
   if (indexA >= 0 && indexA < currentSessionPages.length && indexB >= 0 && indexB < currentSessionPages.length) {
     const temp = currentSessionPages[indexA];

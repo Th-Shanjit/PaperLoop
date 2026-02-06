@@ -1,13 +1,12 @@
 import axios from 'axios';
 import * as FileSystem from 'expo-file-system/legacy'; 
 
-// Use the Stable model for reliability
-const MODEL_ID = 'gemini-2.5-flash-lite'; 
+const MODEL_ID = 'gemini-1.5-flash'; 
 
 interface ScannedPage {
   uri: string;
-  width: number;  // <--- NEW: We need dimensions to crop accurately
-  height: number; // <--- NEW
+  width?: number;  
+  height?: number; 
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -47,7 +46,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
     const page = pages[i];
     const base64Data = await convertUriToBase64(page.uri);
     
-    // NEW PROMPT: "Don't describe. Just locate."
+    // UNIVERSAL PROMPT (No Modes)
     const masterPrompt = `
       Analyze this handwritten exam page.
       
@@ -87,12 +86,9 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
       const data = extractJSON(rawText);
 
       if (data.questions) {
-        // Tag each question with the Page URI so we know where to crop from later
         const tagged = data.questions.map((q: any) => ({
             ...q,
-            pageUri: page.uri, // Important: Link question to source image
-            pageWidth: page.width,
-            pageHeight: page.height,
+            pageUri: page.uri, 
             id: Date.now().toString() + Math.random()
         }));
         allQuestions.push(...tagged);
