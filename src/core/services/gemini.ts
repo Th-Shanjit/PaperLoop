@@ -1,8 +1,8 @@
 import axios from 'axios';
 import * as FileSystem from 'expo-file-system/legacy'; 
 
-// Use Stable 1.5 Flash for reliability
-const MODEL_ID = 'gemini-1.5-flash'; 
+// STABLE MODEL: This is the most reliable ID right now.
+const MODEL_ID = 'gemini-2.5-flash-lite'; 
 
 interface ScannedPage {
   uri: string;
@@ -38,7 +38,9 @@ const extractJSON = (text: string) => {
 
 export const transcribeHandwriting = async (pages: ScannedPage[]) => {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+  // LOG THE URL to ensure it's correct
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${apiKey}`;
+  console.log("Hitting API:", `.../models/${MODEL_ID}:generateContent`);
   
   let allQuestions: any[] = [];
 
@@ -47,7 +49,6 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
     const page = pages[i];
     const base64Data = await convertUriToBase64(page.uri);
     
-    // NEW HYBRID PROMPT: "Don't describe diagrams. Just locate them."
     const masterPrompt = `
       Analyze this handwritten exam page.
       
@@ -87,7 +88,6 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
       const data = extractJSON(rawText);
 
       if (data.questions) {
-        // Tag each question with the source URI so we can crop it later
         const tagged = data.questions.map((q: any) => ({
             ...q,
             pageUri: page.uri, 
@@ -95,8 +95,12 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
         }));
         allQuestions.push(...tagged);
       }
-    } catch (e) {
-      console.error(`Page ${i + 1} Failed`, e);
+    } catch (e: any) {
+      console.error(`Page ${i + 1} Failed`, e.message);
+      if (e.response) {
+        console.error("Server Status:", e.response.status);
+        console.error("Server Data:", e.response.data);
+      }
     }
     
     if (i < pages.length - 1) await sleep(1000);

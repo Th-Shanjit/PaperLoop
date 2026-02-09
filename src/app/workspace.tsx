@@ -79,6 +79,15 @@ export default function WorkspaceScreen() {
     setPages(newPages);
     setSelectedIndex(newIndex); 
   };
+  const handleExit = () => {
+    Alert.alert("Discard Scan?", "Going home will clear these pages.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Discard", style: "destructive", onPress: () => {
+        clearSession();
+        router.replace("/");
+      }}
+    ]);
+  };
 
   // --- REPLACED: NEW ANALYZE FUNCTION ---
   const handleAnalyze = async () => {
