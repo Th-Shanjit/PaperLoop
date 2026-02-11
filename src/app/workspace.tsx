@@ -1,19 +1,20 @@
 import React, { useState, useCallback } from 'react';
 import { 
   View, Text, Image, TouchableOpacity, FlatList, 
-  StyleSheet, Modal, StatusBar, Alert, ActivityIndicator 
+  StyleSheet, Modal, StatusBar, Alert, ActivityIndicator, TextInput, KeyboardAvoidingView, Platform 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImageManipulator from 'expo-image-manipulator'; // <--- NEW IMPORT
+import * as ImageManipulator from 'expo-image-manipulator';
 import { 
   getSessionPages, 
   removePageFromSession, 
   updatePageInSession, 
   swapPagesInSession, 
   clearSession,
-  ScannedPage 
+  ScannedPage,
+  currentSessionPages 
 } from '../core/store/session';
 import { transcribeHandwriting } from '../core/services/gemini';
 
@@ -21,10 +22,12 @@ export default function WorkspaceScreen() {
   const router = useRouter();
   const [pages, setPages] = useState<ScannedPage[]>([]);
   const [selectedImage, setSelectedImage] = useState<ScannedPage | null>(null);
-  const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  
+  const [reorderModalVisible, setReorderModalVisible] = useState(false);
+  const [targetIndex, setTargetIndex] = useState<string>("");
+  const [sourceIndex, setSourceIndex] = useState<number | null>(null);
 
-  // Sync with Store
   useFocusEffect(
     useCallback(() => {
       setPages([...getSessionPages()]);
@@ -35,50 +38,6 @@ export default function WorkspaceScreen() {
     router.push("/camera");
   };
 
-  const handleImagePress = (page: ScannedPage, index: number) => {
-    setSelectedImage(page);
-    setSelectedIndex(index);
-  };
-
-  const handleDeletePage = () => {
-    if (selectedIndex > -1) {
-      removePageFromSession(selectedIndex);
-      const newPages = [...getSessionPages()];
-      setPages(newPages);
-      
-      if (newPages.length === 0) {
-        setSelectedImage(null);
-      } else if (selectedIndex >= newPages.length) {
-        const newIndex = newPages.length - 1;
-        setSelectedIndex(newIndex);
-        setSelectedImage(newPages[newIndex]);
-      } else {
-        setSelectedImage(newPages[selectedIndex]);
-      }
-    }
-  };
-
-  const handleRotate = () => {
-    if (selectedImage && selectedIndex > -1) {
-      const newRotation = (selectedImage.rotation + 90) % 360;
-      updatePageInSession(selectedIndex, { rotation: newRotation });
-      const updatedPage = { ...selectedImage, rotation: newRotation };
-      setSelectedImage(updatedPage);
-      const newPages = [...pages];
-      newPages[selectedIndex] = updatedPage;
-      setPages(newPages);
-    }
-  };
-
-  const handleMovePage = (direction: 'left' | 'right') => {
-    if (selectedIndex === -1) return;
-    const newIndex = direction === 'left' ? selectedIndex - 1 : selectedIndex + 1;
-    if (newIndex < 0 || newIndex >= pages.length) return;
-    swapPagesInSession(selectedIndex, newIndex);
-    const newPages = [...getSessionPages()]; 
-    setPages(newPages);
-    setSelectedIndex(newIndex); 
-  };
   const handleExit = () => {
     Alert.alert("Discard Scan?", "Going home will clear these pages.", [
       { text: "Cancel", style: "cancel" },
@@ -89,58 +48,97 @@ export default function WorkspaceScreen() {
     ]);
   };
 
-  // --- REPLACED: NEW ANALYZE FUNCTION ---
+  const handleDeletePage = (index: number) => {
+    removePageFromSession(index);
+    setPages([...getSessionPages()]);
+  };
+
+  const handleRotatePage = (index: number) => {
+    const p = pages[index];
+    const newRot = (p.rotation + 90) % 360;
+    updatePageInSession(index, { rotation: newRot });
+    setPages([...getSessionPages()]);
+  };
+
+  const handleSwap = (index: number, direction: 'left' | 'right') => {
+    const newIndex = direction === 'left' ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= pages.length) return;
+    swapPagesInSession(index, newIndex);
+    setPages([...getSessionPages()]);
+  };
+
+  const openReorder = (index: number) => {
+    setSourceIndex(index);
+    setTargetIndex((index + 1).toString());
+    setReorderModalVisible(true);
+  };
+
+  const confirmReorder = () => {
+    const target = parseInt(targetIndex) - 1;
+    if (sourceIndex !== null && !isNaN(target) && target >= 0 && target < pages.length) {
+      const item = currentSessionPages.splice(sourceIndex, 1)[0];
+      currentSessionPages.splice(target, 0, item);
+      setPages([...currentSessionPages]);
+    }
+    setReorderModalVisible(false);
+  };
+
   const handleAnalyze = async () => {
     if (pages.length === 0) return;
     setIsAnalyzing(true);
     
     try {
-      // Step A: Get Data from Gemini
       const result = await transcribeHandwriting(pages);
-      
       const processedQuestions = [];
 
-      // Step B: The Cropping Loop
       for (const q of result.questions) {
         let finalQ = { ...q };
-
-        // If Gemini says "There is a diagram here"
         if (q.has_diagram && q.box_2d && q.pageUri) {
           try {
-            // Get real image size
             const { width: imgW, height: imgH } = await new Promise((resolve) => {
                  Image.getSize(q.pageUri, (w, h) => resolve({width: w, height: h}), () => resolve({width: 1000, height: 1000}));
             }) as any;
 
             const [ymin, xmin, ymax, xmax] = q.box_2d;
             
-            // Calculate Crop Rectangle
-            const cropConfig = {
-              originX: (xmin / 1000) * imgW,
-              originY: (ymin / 1000) * imgH,
-              width: ((xmax - xmin) / 1000) * imgW,
-              height: ((ymax - ymin) / 1000) * imgH
-            };
+            // --- FIX: HYBRID PADDING STRATEGY ---
+            // Use 5% OR 50 pixels, whichever is larger.
+            // This ensures small diagrams get at least 50px buffer.
+            const paddingX = Math.max(imgW * 0.05, 50);
+            const paddingY = Math.max(imgH * 0.05, 50);
 
-            // Perform the Cut
+            // Calculate expanded box (clamped to image size)
+            const finalX = Math.max(0, (xmin / 1000) * imgW - paddingX);
+            const finalY = Math.max(0, (ymin / 1000) * imgH - paddingY);
+            
+            // Width is: (Original Width) + (Left Padding) + (Right Padding)
+            const boxW = ((xmax - xmin) / 1000) * imgW;
+            const finalW = Math.min(imgW - finalX, boxW + (paddingX * 2));
+            
+            // Height is: (Original Height) + (Top Padding) + (Bottom Padding)
+            const boxH = ((ymax - ymin) / 1000) * imgH;
+            const finalH = Math.min(imgH - finalY, boxH + (paddingY * 2));
+
+            const cropConfig = {
+              originX: finalX,
+              originY: finalY,
+              width: finalW,
+              height: finalH
+            };
+            // ------------------------------------
+
             const cropResult = await ImageManipulator.manipulateAsync(
               q.pageUri,
               [{ crop: cropConfig }],
               { compress: 1, format: ImageManipulator.SaveFormat.PNG }
             );
 
-            // Save the new image URI to the question object
             finalQ.diagramUri = cropResult.uri;
-            console.log("Cropped Diagram:", cropResult.uri);
-
-          } catch (e) {
-            console.error("Crop Failed", e);
-          }
+          } catch (e) { console.error("Crop Failed", e); }
         }
         processedQuestions.push(finalQ);
       }
 
-      // Step C: Go to Editor with the cropped images
       router.push({
         pathname: "/editor",
         params: { initialData: JSON.stringify(processedQuestions) }
@@ -155,29 +153,52 @@ export default function WorkspaceScreen() {
   };
 
   const renderItem = ({ item, index }: { item: ScannedPage, index: number }) => (
-    <TouchableOpacity onPress={() => handleImagePress(item, index)} style={styles.card}>
-      <Image 
-        source={{ uri: item.uri }} 
-        style={[styles.thumbnail, { transform: [{ rotate: `${item.rotation}deg` }] }]} 
-      />
-      <View style={styles.pageNumberBadge}>
-        <Text style={styles.pageNumberText}>{index + 1}</Text>
+    <View style={styles.card}>
+      <TouchableOpacity onPress={() => setSelectedImage(item)} style={styles.cardImageContainer}>
+        <Image 
+          source={{ uri: item.uri }} 
+          style={[styles.thumbnail, { transform: [{ rotate: `${item.rotation}deg` }] }]} 
+        />
+      </TouchableOpacity>
+      
+      <View style={styles.cardToolbar}>
+        <TouchableOpacity onPress={() => openReorder(index)} style={styles.pageBadge}>
+           <Text style={styles.pageText}>Pg {index + 1}</Text>
+           <Ionicons name="create-outline" size={12} color="white" style={{marginLeft:4}} />
+        </TouchableOpacity>
+
+        <View style={{flexDirection:'row', gap: 8}}>
+          <TouchableOpacity onPress={() => handleSwap(index, 'left')} disabled={index===0} style={styles.miniBtn}>
+            <Ionicons name="caret-back" size={16} color={index===0 ? "#ccc" : "#555"} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => handleSwap(index, 'right')} disabled={index===pages.length-1} style={styles.miniBtn}>
+            <Ionicons name="caret-forward" size={16} color={index===pages.length-1 ? "#ccc" : "#555"} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={{flexDirection:'row', gap: 8}}>
+          <TouchableOpacity onPress={() => handleRotatePage(index)} style={styles.miniBtn}>
+            <Ionicons name="refresh" size={16} color="#555" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => handleDeletePage(index)} style={[styles.miniBtn, {backgroundColor:'#fee2e2'}]}>
+            <Ionicons name="trash" size={16} color="#dc2626" />
+          </TouchableOpacity>
+        </View>
       </View>
-    </TouchableOpacity>
+    </View>
   );
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#F3F4F6" />
-      
       <View style={styles.header}>
         <TouchableOpacity onPress={handleExit} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={24} color="#1F2937" />
-          <Text style={styles.backText}>Home</Text>
+          <Ionicons name="close" size={24} color="#1F2937" />
+          <Text style={styles.backText}>Discard</Text>
         </TouchableOpacity>
         <View style={{alignItems:'center'}}>
-          <Text style={styles.headerTitle}>New Exam</Text>
-          <Text style={styles.headerSub}>{pages.length} pages</Text>
+          <Text style={styles.headerTitle}>Review Pages</Text>
+          <Text style={styles.headerSub}>{pages.length} scanned</Text>
         </View>
         <View style={{width:60}} />
       </View>
@@ -187,35 +208,65 @@ export default function WorkspaceScreen() {
           <TouchableOpacity onPress={handleOpenScanner} style={styles.emptyIconCircle}>
             <Ionicons name="camera-outline" size={40} color="#9CA3AF" />
           </TouchableOpacity>
-          <Text style={styles.emptyTitle}>No scans yet</Text>
-          <Text style={styles.emptySub}>Tap camera to start.</Text>
+          <Text style={styles.emptyTitle}>No pages yet</Text>
         </View>
       ) : (
         <FlatList
           data={pages}
           renderItem={renderItem}
           keyExtractor={(item, index) => `${index}-${item.uri}`} 
-          numColumns={2}
           contentContainerStyle={styles.grid}
-          columnWrapperStyle={{ gap: 12 }}
+          showsVerticalScrollIndicator={false}
         />
       )}
 
       <View style={styles.fabContainer}>
-        {pages.length > 0 && (
+         <TouchableOpacity onPress={handleOpenScanner} style={styles.addBtn}>
+            <Ionicons name="camera" size={24} color="#2563EB" />
+            <Text style={styles.addBtnText}>Add Page</Text>
+         </TouchableOpacity>
+
+         {pages.length > 0 && (
           <TouchableOpacity onPress={handleAnalyze} disabled={isAnalyzing} style={styles.analyzeBtn}>
-            {isAnalyzing ? <ActivityIndicator color="black"/> : <><Text style={styles.analyzeText}>Analyze All</Text><Ionicons name="sparkles" size={18} color="black" style={{marginLeft:8}}/></>}
+            {isAnalyzing ? <ActivityIndicator color="white"/> : (
+              <>
+                <Text style={styles.analyzeText}>Analyze {pages.length} Pages</Text>
+                <Ionicons name="arrow-forward" size={20} color="white" style={{marginLeft:8}}/>
+              </>
+            )}
           </TouchableOpacity>
         )}
-        <TouchableOpacity onPress={handleOpenScanner} style={styles.cameraFab}>
-          <Ionicons name="camera" size={28} color="white" />
-        </TouchableOpacity>
       </View>
+
+      <Modal visible={reorderModalVisible} transparent={true} animationType="fade">
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalContainer}>
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>Move Page</Text>
+            <Text style={styles.dialogSub}>Enter new position number (1 - {pages.length})</Text>
+            <TextInput 
+              style={styles.dialogInput}
+              value={targetIndex}
+              onChangeText={setTargetIndex}
+              keyboardType="number-pad"
+              autoFocus
+              selectTextOnFocus
+            />
+            <View style={styles.dialogActions}>
+              <TouchableOpacity onPress={() => setReorderModalVisible(false)} style={styles.dialogBtn}>
+                <Text style={styles.dialogBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={confirmReorder} style={[styles.dialogBtn, {backgroundColor:'#2563EB'}]}>
+                <Text style={[styles.dialogBtnText, {color:'white'}]}>Move</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <Modal visible={!!selectedImage} transparent={true} animationType="fade">
         <View style={styles.modalContainer}>
           <TouchableOpacity style={styles.modalBackdrop} onPress={() => setSelectedImage(null)} />
-          <View style={styles.modalContent}>
+          <View style={styles.fsContent}>
             {selectedImage && (
               <Image 
                 source={{ uri: selectedImage.uri }} 
@@ -223,36 +274,9 @@ export default function WorkspaceScreen() {
                 resizeMode="contain" 
               />
             )}
-            <View style={styles.modalControls}>
-              <View style={styles.modalHeaderControl}>
-                 <TouchableOpacity 
-                   onPress={() => handleMovePage('left')} 
-                   disabled={selectedIndex === 0}
-                   style={[styles.miniBtn, selectedIndex === 0 && { opacity: 0.3 }]}
-                 >
-                   <Ionicons name="arrow-back" size={20} color="white" />
-                 </TouchableOpacity>
-                 <Text style={styles.modalTitle}>Page {selectedIndex + 1}</Text>
-                 <TouchableOpacity 
-                   onPress={() => handleMovePage('right')} 
-                   disabled={selectedIndex === pages.length - 1}
-                   style={[styles.miniBtn, selectedIndex === pages.length - 1 && { opacity: 0.3 }]}
-                 >
-                   <Ionicons name="arrow-forward" size={20} color="white" />
-                 </TouchableOpacity>
-              </View>
-              <View style={styles.modalActionRow}>
-                <TouchableOpacity onPress={() => setSelectedImage(null)} style={styles.controlBtn}>
-                  <Ionicons name="close" size={24} color="white" />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={handleRotate} style={styles.controlBtn}>
-                  <Ionicons name="refresh" size={24} color="white" />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={handleDeletePage} style={[styles.controlBtn, {backgroundColor:'#EF4444'}]}>
-                  <Ionicons name="trash" size={22} color="white" />
-                </TouchableOpacity>
-              </View>
-            </View>
+            <TouchableOpacity onPress={() => setSelectedImage(null)} style={styles.fsClose}>
+              <Ionicons name="close" size={24} color="black" />
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -263,31 +287,36 @@ export default function WorkspaceScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#E5E7EB' },
-  backBtn: { flexDirection: 'row', alignItems: 'center', width: 60 },
+  backBtn: { flexDirection: 'row', alignItems: 'center', width: 80 },
   backText: { color: '#1F2937', fontSize: 16, marginLeft: 4 },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827' },
   headerSub: { fontSize: 12, color: '#6B7280' },
+  grid: { padding: 16, paddingBottom: 120 },
+  card: { backgroundColor: 'white', borderRadius: 12, marginBottom: 16, overflow: 'hidden', elevation: 2, shadowColor: "#000", shadowOpacity: 0.05 },
+  cardImageContainer: { height: 200, backgroundColor: '#E5E7EB' },
+  thumbnail: { width: '100%', height: '100%', resizeMode: 'contain' },
+  cardToolbar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 10, borderTopWidth: 1, borderColor: '#F3F4F6' },
+  pageBadge: { backgroundColor: '#2563EB', flexDirection:'row', alignItems:'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
+  pageText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
+  miniBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center' },
+  fabContainer: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'white', padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderColor: '#E5E7EB' },
+  addBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EFF6FF', paddingHorizontal: 20, height: 50, borderRadius: 25 },
+  addBtnText: { color: '#2563EB', fontWeight: 'bold', marginLeft: 8 },
+  analyzeBtn: { flex: 1, marginLeft: 16, backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 50, borderRadius: 25, shadowColor: "#000", shadowOpacity: 0.2, elevation: 3 },
+  analyzeText: { fontWeight: 'bold', fontSize: 16, color: 'white' },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 100 },
   emptyIconCircle: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#E5E7EB', justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
-  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 8 },
-  emptySub: { fontSize: 14, color: '#9CA3AF' },
-  grid: { padding: 16, paddingBottom: 120 },
-  card: { flex: 1, height: 220, borderRadius: 12, backgroundColor: '#E5E7EB', overflow: 'hidden', marginBottom: 12 },
-  thumbnail: { width: '100%', height: '100%', resizeMode: 'cover' },
-  pageNumberBadge: { position: 'absolute', bottom: 8, left: 8, backgroundColor: 'rgba(0,0,0,0.6)', width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-  pageNumberText: { color: 'white', fontSize: 12, fontWeight: 'bold' },
-  fabContainer: { position: 'absolute', bottom: 30, right: 20, flexDirection: 'row', alignItems: 'center', gap: 16 },
-  analyzeBtn: { backgroundColor: '#fbbf24', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, height: 56, borderRadius: 28, elevation: 4 },
-  analyzeText: { fontWeight: 'bold', fontSize: 16, color: 'black' },
-  cameraFab: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#2563EB', justifyContent: 'center', alignItems: 'center', elevation: 4 },
-  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center' },
+  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151' },
+  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  dialog: { backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 340 },
+  dialogTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 8, color: '#111' },
+  dialogSub: { fontSize: 14, color: '#666', marginBottom: 20 },
+  dialogInput: { backgroundColor: '#F3F4F6', fontSize: 24, fontWeight: 'bold', textAlign: 'center', padding: 16, borderRadius: 12, marginBottom: 20 },
+  dialogActions: { flexDirection: 'row', gap: 12 },
+  dialogBtn: { flex: 1, padding: 14, borderRadius: 12, alignItems: 'center', backgroundColor: '#F3F4F6' },
+  dialogBtnText: { fontWeight: 'bold', color: '#333' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject },
-  modalContent: { width: '100%', height: '100%', justifyContent: 'center' },
-  fullImage: { flex: 1, width: '100%' },
-  modalControls: { position: 'absolute', bottom: 40, left: 20, right: 20 },
-  modalHeaderControl: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 20, gap: 20 },
-  modalActionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(50,50,50,0.9)', borderRadius: 50, padding: 10, paddingHorizontal: 20 },
-  miniBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
-  controlBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
-  modalTitle: { color: 'white', fontWeight: 'bold', fontSize: 18 },
+  fsContent: { width: '90%', height: '80%', backgroundColor: 'white', borderRadius: 16, overflow: 'hidden' },
+  fullImage: { width: '100%', height: '100%' },
+  fsClose: { position: 'absolute', top: 16, right: 16, backgroundColor: 'rgba(255,255,255,0.8)', borderRadius: 20, padding: 8 }
 });

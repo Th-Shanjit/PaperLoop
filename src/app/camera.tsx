@@ -1,11 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  View, Text, TouchableOpacity, StyleSheet, StatusBar, Alert, Image, ScrollView, Modal 
+  View, Text, TouchableOpacity, StyleSheet, StatusBar, Image, ScrollView, Modal, Alert 
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
+import * as ImagePicker from 'expo-image-picker'; 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { 
   addPageToSession, 
@@ -17,50 +16,31 @@ import {
 
 export default function CameraScreen() {
   const router = useRouter();
-  const [permission, requestPermission] = useCameraPermissions();
-  const cameraRef = useRef<CameraView>(null);
-  const [flash, setFlash] = useState<'off' | 'on'>('off');
-  
-  // Local state to track captured pages for the "Tray"
   const [pages, setPages] = useState<ScannedPage[]>([]);
-  const [reviewIndex, setReviewIndex] = useState<number | null>(null); // For the review modal
+  const [reviewIndex, setReviewIndex] = useState<number | null>(null);
 
-  // Sync with store on load
   useEffect(() => {
-    setPages([...getSessionPages()]);
+    refreshPages();
   }, []);
-
-  if (!permission) return <View />;
-  if (!permission.granted) {
-    return (
-      <View style={styles.center}>
-        <Text style={{marginBottom: 10, color: 'white'}}>Camera permission required</Text>
-        <TouchableOpacity onPress={requestPermission} style={styles.permBtn}><Text style={{color:'white'}}>Grant Permission</Text></TouchableOpacity>
-      </View>
-    );
-  }
 
   const refreshPages = () => {
     setPages([...getSessionPages()]);
   };
 
-  const handleCapture = async () => {
-    if (cameraRef.current) {
-      try {
-        const photo = await cameraRef.current.takePictureAsync({ quality: 0.8, skipProcessing: true });
-        if (photo) {
-          addPageToSession({ uri: photo.uri, width: photo.width, height: photo.height });
-          refreshPages();
-        }
-      } catch (e) { Alert.alert("Error", "Could not capture photo"); }
-    }
-  };
+  const launchSystemCamera = async () => {
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 1, 
+      });
 
-  const handleDone = () => {
-    if (pages.length === 0) {
-      router.back();
-    } else {
-      router.push("/workspace");
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        addPageToSession({ uri: asset.uri, width: asset.width, height: asset.height });
+        refreshPages();
+      } 
+    } catch (e) {
+      Alert.alert("Error", "Could not launch camera");
     }
   };
 
@@ -78,7 +58,14 @@ export default function CameraScreen() {
     }
   };
 
-  // --- REVIEW MODAL ACTIONS ---
+  const handleDone = () => {
+    if (pages.length === 0) {
+      router.back();
+    } else {
+      router.push("/workspace");
+    }
+  };
+
   const handleDelete = () => {
     if (reviewIndex !== null) {
       removePageFromSession(reviewIndex);
@@ -98,74 +85,60 @@ export default function CameraScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar hidden />
+      <StatusBar barStyle="light-content" backgroundColor="black" />
       
-      <CameraView 
-        style={StyleSheet.absoluteFill} 
-        facing="back" 
-        flash={flash}
-        ref={cameraRef}
-      />
+      {/* HEADER */}
+      <SafeAreaView style={styles.topBar}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn}>
+          <Ionicons name="close" size={26} color="white" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>
+          {pages.length === 0 ? "Ready to Scan" : `${pages.length} Pages Scanned`}
+        </Text>
+        <View style={{width:44}} /> 
+      </SafeAreaView>
 
-      <SafeAreaView style={styles.uiLayer} pointerEvents="box-none">
-        
-        {/* TOP BAR */}
-        <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn}>
-            <Ionicons name="close" size={26} color="white" />
-          </TouchableOpacity>
-          <View style={styles.counterPill}>
-            <Text style={styles.counterText}>{pages.length} Pages</Text>
+      {/* MAIN CONTENT: PREVIEW DESK */}
+      <View style={styles.mainArea}>
+        {pages.length === 0 ? (
+          <View style={styles.centerMsg}>
+             <Ionicons name="documents-outline" size={64} color="#333" />
+             <Text style={{color:'#666', marginTop:16, fontSize: 16}}>Pages you scan will appear here</Text>
+             <Text style={{color:'#444', marginTop:8, fontSize: 13}}>Tap '+' below to start</Text>
           </View>
-          <TouchableOpacity onPress={() => setFlash(f => f === 'off' ? 'on' : 'off')} style={styles.iconBtn}>
-            <Ionicons name={flash === 'on' ? "flash" : "flash-off"} size={22} color="white" />
-          </TouchableOpacity>
-        </View>
-
-        {/* MIDDLE: EMPTY SPACER */}
-        <View style={{flex: 1}} />
-
-        {/* PREVIEW TRAY (WhatsApp Style) */}
-        {pages.length > 0 && (
-          <View style={styles.trayContainer}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.trayContent}>
-              {pages.map((p, index) => (
-                <TouchableOpacity key={index} onPress={() => setReviewIndex(index)} style={styles.trayItem}>
-                  <Image 
-                    source={{ uri: p.uri }} 
-                    style={[styles.trayThumb, { transform: [{ rotate: `${p.rotation}deg` }] }]} 
-                  />
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
+        ) : (
+          <ScrollView contentContainerStyle={styles.grid} showsVerticalScrollIndicator={false}>
+             {pages.map((p, index) => (
+               <TouchableOpacity key={index} onPress={() => setReviewIndex(index)} style={styles.gridItem}>
+                 <Image 
+                   source={{ uri: p.uri }} 
+                   style={[styles.gridThumb, { transform: [{ rotate: `${p.rotation}deg` }] }]} 
+                   resizeMode="contain" // FIX: Ensures no cropping on rotation
+                 />
+                 <View style={styles.badge}><Text style={styles.badgeText}>{index + 1}</Text></View>
+               </TouchableOpacity>
+             ))}
+          </ScrollView>
         )}
+      </View>
 
-        {/* BOTTOM CONTROL BAR */}
-        <View style={styles.bottomBar}>
-          
-          {/* LEFT: GALLERY (Upload) */}
-          <TouchableOpacity onPress={pickImage} style={styles.galleryBtn}>
-            <Ionicons name="images" size={24} color="white" />
-          </TouchableOpacity>
+      {/* BOTTOM ACTION BAR */}
+      <SafeAreaView style={styles.bottomBar} edges={['bottom']}>
+        <TouchableOpacity onPress={pickImage} style={styles.subBtn}>
+          <Ionicons name="images" size={24} color="white" />
+        </TouchableOpacity>
 
-          {/* CENTER: SHUTTER */}
-          <View style={styles.shutterContainer}>
-             <TouchableOpacity onPress={handleCapture} style={styles.captureBtn}>
-               <View style={styles.captureInner} />
-             </TouchableOpacity>
-          </View>
+        <TouchableOpacity onPress={launchSystemCamera} style={styles.captureBtn}>
+          <Ionicons name="add" size={40} color="black" />
+        </TouchableOpacity>
 
-          {/* RIGHT: DONE (Icon) */}
-          <TouchableOpacity 
-            onPress={handleDone} 
-            style={[styles.doneBtn, pages.length > 0 ? styles.doneActive : styles.doneInactive]}
-          >
-            <Ionicons name="checkmark" size={32} color="white" />
-          </TouchableOpacity>
-
-        </View>
-
+        <TouchableOpacity 
+          onPress={handleDone} 
+          style={[styles.doneBtn, pages.length > 0 ? styles.doneActive : styles.doneInactive]}
+          disabled={pages.length === 0}
+        >
+          <Ionicons name="checkmark" size={28} color={pages.length > 0 ? "white" : "#666"} />
+        </TouchableOpacity>
       </SafeAreaView>
 
       {/* REVIEW MODAL */}
@@ -179,8 +152,6 @@ export default function CameraScreen() {
                 resizeMode="contain" 
               />
             )}
-            
-            {/* Modal Controls */}
             <View style={styles.modalControls}>
               <TouchableOpacity onPress={() => setReviewIndex(null)} style={styles.controlBtn}>
                 <Ionicons name="close" size={24} color="white" />
@@ -202,46 +173,46 @@ export default function CameraScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'black' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'black' },
-  permBtn: { padding: 12, backgroundColor: '#2563EB', borderRadius: 8 },
   
-  uiLayer: { flex: 1, justifyContent: 'space-between' },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 10 },
+  iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: '#333', borderRadius: 22 },
+  headerTitle: { color: 'white', fontSize: 16, fontWeight: 'bold' },
 
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 10, alignItems: 'center' },
-  iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 22 },
-  counterPill: { backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
-  counterText: { color: 'white', fontWeight: 'bold' },
-
-  // TRAY
-  trayContainer: { height: 80, marginBottom: 10 },
-  trayContent: { paddingHorizontal: 20, gap: 10, alignItems: 'center' },
-  trayItem: { width: 60, height: 60, borderRadius: 8, overflow: 'hidden', borderWidth: 2, borderColor: 'white', backgroundColor: '#333' },
-  trayThumb: { width: '100%', height: '100%' },
-
-  // BOTTOM BAR
-  bottomBar: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    paddingHorizontal: 30, 
-    paddingBottom: 40,
-    height: 100,
-    position: 'relative'
+  mainArea: { flex: 1, backgroundColor: '#111' },
+  centerMsg: { flex: 1, justifyContent: 'center', alignItems: 'center', opacity: 0.8 },
+  
+  grid: { flexDirection: 'row', flexWrap: 'wrap', padding: 15, gap: 15 },
+  
+  // FIX: Square Aspect Ratio + Centering
+  gridItem: { 
+    width: '30%', 
+    aspectRatio: 1, // Forces a square shape
+    backgroundColor: '#222', 
+    borderRadius: 12, 
+    overflow: 'hidden', 
+    borderWidth: 1, 
+    borderColor: '#333',
+    justifyContent: 'center',
+    alignItems: 'center'
   },
-  galleryBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
   
-  shutterContainer: { position: 'absolute', left: 0, right: 0, alignItems: 'center', bottom: 40, pointerEvents: 'box-none' },
-  captureBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center', elevation: 5 },
-  captureInner: { width: 68, height: 68, borderRadius: 34, borderWidth: 2, borderColor: '#111', backgroundColor: 'white' },
+  gridThumb: { width: '100%', height: '100%' },
+  
+  badge: { position: 'absolute', top: 6, right: 6, backgroundColor: '#2563EB', width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'rgba(0,0,0,0.5)' },
+  badgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
 
+  bottomBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 40, paddingVertical: 20, backgroundColor: 'black' },
+  
+  subBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#222', justifyContent: 'center', alignItems: 'center' },
+  captureBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: 'white', justifyContent: 'center', alignItems: 'center' },
+  
   doneBtn: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },
   doneActive: { backgroundColor: '#2563EB' },
-  doneInactive: { backgroundColor: 'rgba(255,255,255,0.2)' },
+  doneInactive: { backgroundColor: '#222' },
 
-  // MODAL
-  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
+  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
-  modalImage: { width: '90%', height: '70%' },
+  modalImage: { width: '90%', height: '60%' },
   modalControls: { flexDirection: 'row', gap: 30, marginTop: 40 },
-  controlBtn: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' }
+  controlBtn: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center' }
 });
