@@ -34,7 +34,7 @@ export default function EditorScreen() {
   const router = useRouter();
   const params = useLocalSearchParams(); 
   
-  // Robust Parameter Handling (Fixes "Cant Edit" bug)
+  // FIX: Robust ID Retrieval
   const projectId = Array.isArray(params.projectId) ? params.projectId[0] : params.projectId;
   const initialData = Array.isArray(params.initialData) ? params.initialData[0] : params.initialData;
 
@@ -57,7 +57,7 @@ export default function EditorScreen() {
   // --- HYDRATION (Load Data) ---
   useEffect(() => {
     const init = async () => {
-      // 1. EDIT MODE: Load existing project from Dashboard
+      // 1. EDIT MODE: Load existing project
       if (projectId) {
         const saved = await getProject(projectId);
         if (saved) {
