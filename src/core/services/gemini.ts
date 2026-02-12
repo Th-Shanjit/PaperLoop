@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as ImageManipulator from 'expo-image-manipulator';
 
-// Use 'gemini-2.0-flash-exp' if available for better vision, otherwise 'gemini-1.5-flash'
+// Use 'gemini-2.0-flash-exp' if available, otherwise 'gemini-1.5-flash'
 const MODEL_ID = 'gemini-3-flash-preview'; 
 
 interface ScannedPage {
@@ -16,7 +16,7 @@ const compressImage = async (uri: string): Promise<string> => {
   try {
     const result = await ImageManipulator.manipulateAsync(
       uri,
-      [{ resize: { width: 1600 } }], // High res is critical for Chemistry
+      [{ resize: { width: 1600 } }], 
       { 
         compress: 0.7, 
         format: ImageManipulator.SaveFormat.JPEG, 
@@ -35,21 +35,21 @@ const cleanQuestionText = (text: string): string => {
   if (!text) return "";
   let clean = text;
 
-  // 1. UN-ESCAPE DOLLAR SIGNS
-  // The AI often writes "\$x^2\$" to be "safe" for JSON. 
-  // We strip the backslash so MathJax sees "$x^2$".
-  clean = clean.replace(/\\\$/g, '$');
+  // 1. SCORCHED EARTH DOLLAR FIX
+  // Removes ANY number of backslashes before a dollar sign.
+  // matches "\$" or "\\$" or "\\\$" -> replaces with "$"
+  clean = clean.replace(/\\+\$/g, '$');
   
-  // 2. FIX CHEMISTRY TYPOS (0 vs O)
-  // Replaces "C4H802" -> "C4H8O2"
-  // Looks for a Letter followed by '0' followed by a number or end of word
-  clean = clean.replace(/([A-Za-z])0(?=\d)/g, '$1O'); // e.g. H02 -> HO2
-  clean = clean.replace(/([A-Za-z])0$/g, '$1O');      // e.g. H20 -> H2O
+  // 2. CHEMISTRY FIX (0 vs O)
+  // Fixes "C4H802" -> "C4H8O2" (Zero between digits)
+  clean = clean.replace(/(?<=[A-Za-z]\d+)0(?=\d)/g, 'O'); 
+  // Fixes "H20" -> "H2O" (Zero at end of formula)
+  clean = clean.replace(/(?<=[A-Za-z]\d+)0$/g, 'O');
+  // Fixes "H_80_2" -> "H_8O_2" (Zero before underscore)
+  clean = clean.replace(/(?<=\d)0(?=_)/g, 'O');
 
-  // 3. FORCE LATEX WRAPPING (Heuristic)
-  // If we see something that looks like a formula (e.g. C2H4) but isn't wrapped in $, wrap it.
-  // This is a safety net for when the AI forgets the dollars entirely.
-  // Regex: Word boundary, C followed by numbers/letters, length > 2
+  // 3. FORCE LATEX WRAPPING (Safety Net)
+  // If we see a formula like C2H4O2 that is NOT wrapped in $, wrap it.
   clean = clean.replace(/(?<!\$)\b([C][0-9]+[H][0-9A-Z]*)\b(?!\$)/g, '$$$1$$');
 
   return clean;
@@ -61,7 +61,6 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
   
   let allQuestions: any[] = [];
 
-  // SIMPLE SCHEMA: Guarantees structure so the app never crashes
   const responseSchema = {
     type: "OBJECT",
     properties: {
@@ -99,7 +98,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
       1. Extract all questions, marks, and diagrams.
       2. **MATH/CHEMISTRY:** - Use LaTeX formatting ($...$).
          - Write "$x^2$" or "$C_4H_8O_2$".
-         - Be careful: "O" is Oxygen, "0" is Zero.
+         - NEVER escape the dollar sign.
       3. **DIAGRAMS:** - If a visual exists, set "has_diagram": true and "box_2d": [ymin, xmin, ymax, xmax] (0-1000).
 
       Return valid JSON matching the schema.
@@ -125,7 +124,6 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
       if (data.questions) {
         const tagged = data.questions.map((q: any) => ({
             ...q,
-            // RUN THE CLEANER
             question_text: cleanQuestionText(q.question_text),
             pageUri: page.uri, 
             id: Date.now().toString() + Math.random()

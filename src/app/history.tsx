@@ -1,96 +1,171 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, FlatList, TouchableOpacity, Alert } from 'react-native';
+import { 
+  View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, StatusBar, 
+  RefreshControl, Modal, TextInput 
+} from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { ChevronLeft, Trash2, FileText } from 'lucide-react-native';
-import tw from 'twrnc';
-import { getSavedExams, deleteExam, SavedExam } from '../core/services/storage';
-import { generateExamPDF } from '../core/services/pdf';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { loadProjects, deleteProject, renameProject, ExamProject } from '../core/services/storage';
 
 export default function HistoryScreen() {
   const router = useRouter();
-  const [exams, setExams] = useState<SavedExam[]>([]);
+  const [projects, setProjects] = useState<ExamProject[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  
+  // Rename State
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [newTitle, setNewTitle] = useState("");
 
-  // Reload data every time screen opens
+  const loadData = async () => {
+    setRefreshing(true);
+    const data = await loadProjects();
+    setProjects(data);
+    setRefreshing(false);
+  };
+
   useFocusEffect(
     useCallback(() => {
-      loadExams();
+      loadData();
     }, [])
   );
 
-  const loadExams = async () => {
-    const data = await getSavedExams();
-    setExams(data);
+  const handleOpen = (project: ExamProject) => {
+    router.push({
+      pathname: "/editor",
+      params: { projectId: project.id }
+    });
   };
 
-  const handleDelete = async (id: string) => {
-    Alert.alert("Delete Exam", "This action cannot be undone.", [
+  const handleDelete = (id: string) => {
+    Alert.alert("Delete Exam?", "This action cannot be undone.", [
       { text: "Cancel", style: "cancel" },
-      { 
-        text: "Delete", 
-        style: "destructive", 
-        onPress: async () => {
-          const updated = await deleteExam(id);
-          setExams(updated);
-        }
-      }
+      { text: "Delete", style: "destructive", onPress: async () => {
+          await deleteProject(id);
+          loadData();
+      }}
     ]);
   };
 
-  const handleOpenPDF = async (exam: SavedExam) => {
-    // Create a temporary header using the saved title
-    const tempHeader = {
-      schoolName: "Saved History Exam",
-      examTitle: exam.title,       // Use the saved title here
-      duration: "N/A",
-      totalMarks: "N/A",
-      instructions: "Reprinted from History"
-    };
-  
-    // Now pass the object, not just the string
-    await generateExamPDF(tempHeader, exam.questions, 'simple');
+  const initRename = (project: ExamProject) => {
+    setRenameId(project.id);
+    setNewTitle(project.title || project.header.title);
   };
 
-  return (
-    <View style={tw`flex-1 bg-gray-50`}>
-      {/* Header */}
-      <View style={tw`bg-white pt-12 pb-4 px-6 border-b border-gray-200 flex-row items-center gap-4`}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <ChevronLeft size={28} color="#333" />
+  const confirmRename = async () => {
+    if (renameId && newTitle.trim()) {
+      await renameProject(renameId, newTitle.trim());
+      setRenameId(null);
+      loadData(); // Refresh list to show new name
+    }
+  };
+
+  const renderItem = ({ item }: { item: ExamProject }) => (
+    <TouchableOpacity onPress={() => handleOpen(item)} style={styles.card} activeOpacity={0.7}>
+      <View style={styles.iconBox}>
+        <Ionicons name="document-text" size={24} color="#2563EB" />
+      </View>
+      <View style={styles.info}>
+        <Text style={styles.title} numberOfLines={1}>
+          {item.title || "Untitled Exam"}
+        </Text>
+        <Text style={styles.sub}>
+          {/* Fix: Correct Date Formatting */}
+          {new Date(item.updatedAt).toLocaleDateString(undefined, {
+            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+          })}
+           {' • '}{item.questions.length} Questions
+        </Text>
+      </View>
+      
+      {/* Action Buttons */}
+      <View style={styles.actions}>
+        <TouchableOpacity onPress={() => initRename(item)} style={styles.actionBtn}>
+          <Ionicons name="pencil" size={20} color="#64748B" />
         </TouchableOpacity>
-        <Text style={tw`text-2xl font-bold text-gray-900`}>Saved Exams</Text>
+        <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.actionBtn}>
+          <Ionicons name="trash-outline" size={20} color="#EF4444" />
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#F3F4F6" />
+      
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Ionicons name="arrow-back" size={24} color="#111" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>My Exams</Text>
+        <View style={{width:40}} />
       </View>
 
-      {/* List */}
       <FlatList
-        data={exams}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={tw`p-6`}
+        data={projects}
+        renderItem={renderItem}
+        keyExtractor={item => item.id}
+        contentContainerStyle={styles.list}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} />}
         ListEmptyComponent={
-          <View style={tw`items-center py-20`}>
-            <Text style={tw`text-gray-400 text-lg`}>No saved exams yet.</Text>
+          <View style={styles.empty}>
+            <Ionicons name="file-tray-outline" size={64} color="#CBD5E1" />
+            <Text style={styles.emptyText}>No saved exams</Text>
+            <Text style={styles.emptySub}>Scanned exams will appear here</Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <TouchableOpacity 
-            onPress={() => handleOpenPDF(item)}
-            style={tw`bg-white p-4 rounded-xl mb-4 shadow-sm border border-gray-100 flex-row items-center justify-between`}
-          >
-            <View style={tw`flex-row items-center gap-4 flex-1`}>
-              <View style={tw`bg-blue-100 p-3 rounded-lg`}>
-                <FileText size={24} color="#2563EB" />
-              </View>
-              <View>
-                <Text style={tw`font-bold text-gray-800 text-lg`}>{item.title}</Text>
-                <Text style={tw`text-gray-500`}>{item.date} • {item.questions.length} Questions</Text>
-              </View>
-            </View>
-
-            <TouchableOpacity onPress={() => handleDelete(item.id)} style={tw`p-3`}>
-              <Trash2 size={20} color="#EF4444" />
-            </TouchableOpacity>
-          </TouchableOpacity>
-        )}
       />
-    </View>
+
+      {/* RENAME MODAL */}
+      <Modal visible={renameId !== null} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Rename Exam</Text>
+            <TextInput 
+              style={styles.modalInput} 
+              value={newTitle} 
+              onChangeText={setNewTitle} 
+              autoFocus 
+              selectTextOnFocus
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity onPress={() => setRenameId(null)} style={styles.modalBtn}>
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={confirmRename} style={[styles.modalBtn, {backgroundColor:'#2563EB'}]}>
+                <Text style={[styles.modalBtnText, {color:'white'}]}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F3F4F6' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#E5E7EB' },
+  backBtn: { padding: 8 },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: '#111' },
+  list: { padding: 16 },
+  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', padding: 16, borderRadius: 12, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.05, elevation: 1 },
+  iconBox: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#EFF6FF', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  info: { flex: 1 },
+  title: { fontSize: 16, fontWeight: '700', color: '#1E293B', marginBottom: 4 },
+  sub: { fontSize: 12, color: '#64748B' },
+  actions: { flexDirection: 'row', gap: 8 },
+  actionBtn: { padding: 8 },
+  empty: { alignItems: 'center', marginTop: 100 },
+  emptyText: { fontSize: 18, fontWeight: '600', color: '#94A3B8', marginTop: 16 },
+  emptySub: { fontSize: 14, color: '#CBD5E1', marginTop: 8 },
+  
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
+  modalContent: { backgroundColor: 'white', borderRadius: 16, padding: 20 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
+  modalInput: { backgroundColor: '#F3F4F6', padding: 12, borderRadius: 8, fontSize: 16, marginBottom: 20 },
+  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12 },
+  modalBtn: { paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8, backgroundColor: '#E5E7EB' },
+  modalBtnText: { fontWeight: '600', color: '#374151' }
+});

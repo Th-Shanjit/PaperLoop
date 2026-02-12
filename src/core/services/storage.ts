@@ -1,56 +1,86 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 
-const STORAGE_KEY = 'paperloop_exams';
+const PROJECT_DIR = FileSystem.documentDirectory + 'projects/';
 
-export interface SavedExam {
+export interface ExamProject {
   id: string;
   title: string;
-  date: string;
+  updatedAt: number;
+  header: {
+    schoolName: string;
+    title: string;
+    duration: string;
+    totalMarks: string;
+    instructions: string;
+  };
   questions: any[];
+  settings: {
+    columnLayout: '1-column' | '2-column';
+    fontTheme: 'modern' | 'classic';
+  };
 }
 
-// 1. SAVE AN EXAM
-export const saveExam = async (title: string, questions: any[]) => {
-  try {
-    const newExam: SavedExam = {
-      id: Date.now().toString(), // Simple unique ID
-      title: title || "Untitled Exam",
-      date: new Date().toLocaleDateString(),
-      questions: questions
-    };
-
-    // Get existing exams
-    const existing = await getSavedExams();
-    const updated = [newExam, ...existing]; // Add new one to the top
-
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    return true;
-  } catch (e) {
-    console.error("Failed to save exam", e);
-    return false;
+const ensureDir = async () => {
+  const dirInfo = await FileSystem.getInfoAsync(PROJECT_DIR);
+  if (!dirInfo.exists) {
+    await FileSystem.makeDirectoryAsync(PROJECT_DIR, { intermediates: true });
   }
 };
 
-// 2. GET ALL EXAMS
-export const getSavedExams = async (): Promise<SavedExam[]> => {
+export const saveProject = async (project: ExamProject) => {
+  await ensureDir();
+  const fileUri = PROJECT_DIR + `${project.id}.json`;
+  await FileSystem.writeAsStringAsync(fileUri, JSON.stringify(project));
+  return fileUri;
+};
+
+export const loadProjects = async (): Promise<ExamProject[]> => {
+  await ensureDir();
+  const files = await FileSystem.readDirectoryAsync(PROJECT_DIR);
+  
+  const projects: ExamProject[] = [];
+  for (const file of files) {
+    if (file.endsWith('.json')) {
+      try {
+        const content = await FileSystem.readAsStringAsync(PROJECT_DIR + file);
+        const data = JSON.parse(content);
+        // Fix: Ensure every project has a valid date
+        if (!data.updatedAt) data.updatedAt = Date.now();
+        // Fix: Ensure header title is synced
+        if (!data.title) data.title = data.header?.title || "Untitled";
+        
+        projects.push(data);
+      } catch (e) {
+        console.warn("Corrupt project file:", file);
+      }
+    }
+  }
+  // Sort by Newest Modified
+  return projects.sort((a, b) => b.updatedAt - a.updatedAt);
+};
+
+export const deleteProject = async (id: string) => {
+  const fileUri = PROJECT_DIR + `${id}.json`;
+  await FileSystem.deleteAsync(fileUri, { idempotent: true });
+};
+
+export const getProject = async (id: string): Promise<ExamProject | null> => {
   try {
-    const jsonValue = await AsyncStorage.getItem(STORAGE_KEY);
-    return jsonValue != null ? JSON.parse(jsonValue) : [];
+    const fileUri = PROJECT_DIR + `${id}.json`;
+    const content = await FileSystem.readAsStringAsync(fileUri);
+    return JSON.parse(content);
   } catch (e) {
-    console.error("Failed to load exams", e);
-    return [];
+    return null;
   }
 };
 
-// 3. DELETE AN EXAM
-export const deleteExam = async (id: string) => {
-  try {
-    const existing = await getSavedExams();
-    const filtered = existing.filter(exam => exam.id !== id);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
-    return filtered;
-  } catch (e) {
-    console.error("Failed to delete exam", e);
-    return [];
+// NEW: Rename function for Dashboard
+export const renameProject = async (id: string, newTitle: string) => {
+  const project = await getProject(id);
+  if (project) {
+    project.title = newTitle;
+    project.header.title = newTitle; // Sync header title too
+    project.updatedAt = Date.now();
+    await saveProject(project);
   }
 };
