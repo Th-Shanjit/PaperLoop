@@ -1,7 +1,6 @@
 import axios from 'axios';
 import * as ImageManipulator from 'expo-image-manipulator';
 
-// Use 'gemini-2.0-flash-exp' if available, otherwise 'gemini-1.5-flash'
 const MODEL_ID = 'gemini-3-flash-preview'; 
 
 interface ScannedPage {
@@ -17,11 +16,7 @@ const compressImage = async (uri: string): Promise<string> => {
     const result = await ImageManipulator.manipulateAsync(
       uri,
       [{ resize: { width: 1600 } }], 
-      { 
-        compress: 0.7, 
-        format: ImageManipulator.SaveFormat.JPEG, 
-        base64: true 
-      }
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
     );
     return result.base64 || "";
   } catch (e) {
@@ -30,78 +25,69 @@ const compressImage = async (uri: string): Promise<string> => {
   }
 };
 
-// --- THE JANITOR: Brute Force fixes for common AI mistakes ---
-const cleanQuestionText = (text: string): string => {
+const cleanText = (text: string): string => {
   if (!text) return "";
-  let clean = text;
-
-  // 1. SCORCHED EARTH DOLLAR FIX
-  // Removes ANY number of backslashes before a dollar sign.
-  // matches "\$" or "\\$" or "\\\$" -> replaces with "$"
-  clean = clean.replace(/\\+\$/g, '$');
-  
-  // 2. CHEMISTRY FIX (0 vs O)
-  // Fixes "C4H802" -> "C4H8O2" (Zero between digits)
-  clean = clean.replace(/(?<=[A-Za-z]\d+)0(?=\d)/g, 'O'); 
-  // Fixes "H20" -> "H2O" (Zero at end of formula)
-  clean = clean.replace(/(?<=[A-Za-z]\d+)0$/g, 'O');
-  // Fixes "H_80_2" -> "H_8O_2" (Zero before underscore)
-  clean = clean.replace(/(?<=\d)0(?=_)/g, 'O');
-
-  // 3. FORCE LATEX WRAPPING (Safety Net)
-  // If we see a formula like C2H4O2 that is NOT wrapped in $, wrap it.
-  clean = clean.replace(/(?<!\$)\b([C][0-9]+[H][0-9A-Z]*)\b(?!\$)/g, '$$$1$$');
-
-  return clean;
+  // Fix LaTeX escaping and Chemistry typos
+  return text
+    .replace(/\\+\$/g, '$')
+    .replace(/(?<=[A-Za-z]\d+)0(?=\d)/g, 'O') 
+    .replace(/(?<=[A-Za-z]\d+)0$/g, 'O')
+    .replace(/(?<=\d)0(?=_)/g, 'O');
 };
 
 export const transcribeHandwriting = async (pages: ScannedPage[]) => {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${apiKey}`;
   
-  let allQuestions: any[] = [];
+  let allSections: any[] = [];
 
+  // --- NEW SCHEMA: Sections -> Questions -> Options ---
   const responseSchema = {
     type: "OBJECT",
     properties: {
-      questions: {
+      sections: {
         type: "ARRAY",
         items: {
           type: "OBJECT",
           properties: {
-            question_number: { type: "STRING" },
-            question_text: { type: "STRING" },
-            marks: { type: "STRING" },
-            has_diagram: { type: "BOOLEAN" },
-            box_2d: {
+            title: { type: "STRING" }, // e.g. "Section A"
+            layout_hint: { type: "STRING" }, // "1-column" or "2-column"
+            questions: {
               type: "ARRAY",
-              items: { type: "NUMBER" }
+              items: {
+                type: "OBJECT",
+                properties: {
+                  number: { type: "STRING" },
+                  text: { type: "STRING" },
+                  marks: { type: "STRING" },
+                  type: { type: "STRING", enum: ["standard", "mcq"] },
+                  options: { type: "ARRAY", items: { type: "STRING" } }, // For MCQs
+                  has_diagram: { type: "BOOLEAN" }
+                },
+                required: ["number", "text", "marks", "type"]
+              }
             }
           },
-          required: ["question_number", "question_text", "marks", "has_diagram"]
+          required: ["title", "questions"]
         }
       }
     },
-    required: ["questions"]
+    required: ["sections"]
   };
 
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
     const base64Data = await compressImage(page.uri);
-    
     if (!base64Data) continue;
 
     const masterPrompt = `
-      Analyze this exam page.
+      Analyze this exam page. Structure the output into SECTIONS.
       
-      INSTRUCTIONS:
-      1. Extract all questions, marks, and diagrams.
-      2. **MATH/CHEMISTRY:** - Use LaTeX formatting ($...$).
-         - Write "$x^2$" or "$C_4H_8O_2$".
-         - NEVER escape the dollar sign.
-      3. **DIAGRAMS:** - If a visual exists, set "has_diagram": true and "box_2d": [ymin, xmin, ymax, xmax] (0-1000).
-
-      Return valid JSON matching the schema.
+      RULES:
+      1. **SECTIONS:** If you see headers like "Section A", "Part 1", or distinct topics, create a new Section. If none, use "Default Section".
+      2. **MCQs:** If a question has options (A, B, C, D), set "type": "mcq" and extract options into the list.
+      3. **MATH:** Use standard LaTeX ($...$). Fix "0" vs "O" typos in Chemistry.
+      4. **LAYOUT:** If a section contains mainly short MCQs, set "layout_hint": "2-column". Long answers = "1-column".
     `;
 
     try {
@@ -121,14 +107,25 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
       const rawText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
       const data = JSON.parse(rawText);
 
-      if (data.questions) {
-        const tagged = data.questions.map((q: any) => ({
-            ...q,
-            question_text: cleanQuestionText(q.question_text),
-            pageUri: page.uri, 
-            id: Date.now().toString() + Math.random()
+      if (data.sections) {
+        // Post-Process: Add IDs and clean text
+        const processed = data.sections.map((sec: any) => ({
+          id: Date.now().toString() + Math.random(),
+          title: sec.title || "Section",
+          layout: sec.layout_hint || "1-column",
+          questions: sec.questions.map((q: any) => ({
+            id: Date.now().toString() + Math.random(),
+            number: q.number,
+            text: cleanText(q.text),
+            marks: q.marks,
+            type: q.type || 'standard',
+            options: q.options || [],
+            diagramUri: q.has_diagram ? page.uri : undefined, // Link scan if needed
+            hideText: false,
+            isFullWidth: false
+          }))
         }));
-        allQuestions.push(...tagged);
+        allSections.push(...processed);
       }
       
     } catch (e: any) {
@@ -138,5 +135,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
     if (i < pages.length - 1) await sleep(500);
   }
 
-  return { questions: allQuestions };
+  // Flatten logic for the Editor (The Editor expects a Flat List of Questions OR Sections)
+  // Since we updated Editor to handle Sections, we return the sections directly.
+  return { sections: allSections };
 };
