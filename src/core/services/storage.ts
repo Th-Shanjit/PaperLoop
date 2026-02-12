@@ -3,6 +3,16 @@ import * as FileSystem from 'expo-file-system/legacy';
 const PROJECT_DIR = FileSystem.documentDirectory + 'projects/';
 
 // --- DATA MODELS ---
+
+// NEW: Export this so pdf.ts can use it
+export interface ExamHeader {
+  schoolName: string;
+  title: string;
+  duration: string;
+  totalMarks: string;
+  instructions: string;
+}
+
 export interface Question {
   id: string;
   number: string;
@@ -11,9 +21,8 @@ export interface Question {
   diagramUri?: string;
   hideText?: boolean;
   isFullWidth?: boolean;
-  // NEW: MCQ Support
   type?: 'standard' | 'mcq'; 
-  options?: string[]; // ["Option A", "Option B", "Option C", "Option D"]
+  options?: string[]; 
 }
 
 export interface Section {
@@ -27,15 +36,9 @@ export interface ExamProject {
   id: string;
   title: string;
   updatedAt: number;
-  header: {
-    schoolName: string;
-    title: string;
-    duration: string;
-    totalMarks: string;
-    instructions: string;
-  };
+  header: ExamHeader; // Use the exported interface
   sections: Section[]; 
-  questions?: Question[]; // Legacy support
+  questions?: Question[]; 
   settings: {
     fontTheme: 'modern' | 'classic';
   };

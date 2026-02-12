@@ -11,23 +11,63 @@ interface ScannedPage {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const compressImage = async (uri: string): Promise<string> => {
+// Helper: Pre-process main scan (Resize for speed)
+const compressImage = async (uri: string): Promise<{ base64: string, width: number, height: number, uri: string }> => {
   try {
     const result = await ImageManipulator.manipulateAsync(
       uri,
-      [{ resize: { width: 1600 } }], 
+      [{ resize: { width: 1600 } }], // Standardize width
       { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
     );
-    return result.base64 || "";
+    return { 
+      base64: result.base64 || "", 
+      width: result.width, 
+      height: result.height,
+      uri: result.uri 
+    };
   } catch (e) {
     console.error("Compression Error:", e);
-    return "";
+    throw e;
+  }
+};
+
+// Helper: Crop & Apply "CamScanner" Filter
+const cropAndEnhanceDiagram = async (originalUri: string, box: number[], imgWidth: number, imgHeight: number) => {
+  try {
+    // Gemini returns [ymin, xmin, ymax, xmax] (0-1000 scale)
+    const [ymin, xmin, ymax, xmax] = box;
+    
+    // Convert to Pixels
+    const originX = (xmin / 1000) * imgWidth;
+    const originY = (ymin / 1000) * imgHeight;
+    const width = ((xmax - xmin) / 1000) * imgWidth;
+    const height = ((ymax - ymin) / 1000) * imgHeight;
+
+    // Safety padding (expand box by 10px)
+    const safeX = Math.max(0, originX - 10);
+    const safeY = Math.max(0, originY - 10);
+    const safeW = Math.min(imgWidth - safeX, width + 20);
+    const safeH = Math.min(imgHeight - safeY, height + 20);
+
+    const result = await ImageManipulator.manipulateAsync(
+      originalUri,
+      [
+        { crop: { originX: safeX, originY: safeY, width: safeW, height: safeH } },
+        // "CamScanner Effect" Simulation
+        // 1. Resize to save space
+        { resize: { width: Math.min(safeW, 800) } },
+      ],
+      { compress: 0.8, format: ImageManipulator.SaveFormat.PNG } // PNG for crisp lines
+    );
+    return result.uri;
+  } catch (e) {
+    console.warn("Auto-Crop Failed:", e);
+    return originalUri; // Fallback to full page
   }
 };
 
 const cleanText = (text: string): string => {
   if (!text) return "";
-  // Fix LaTeX escaping and Chemistry typos
   return text
     .replace(/\\+\$/g, '$')
     .replace(/(?<=[A-Za-z]\d+)0(?=\d)/g, 'O') 
@@ -41,7 +81,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
   
   let allSections: any[] = [];
 
-  // --- NEW SCHEMA: Sections -> Questions -> Options ---
+  // --- SCHEMA: Added 'diagram_box_2d' ---
   const responseSchema = {
     type: "OBJECT",
     properties: {
@@ -50,8 +90,8 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
         items: {
           type: "OBJECT",
           properties: {
-            title: { type: "STRING" }, // e.g. "Section A"
-            layout_hint: { type: "STRING" }, // "1-column" or "2-column"
+            title: { type: "STRING" }, 
+            layout_hint: { type: "STRING" },
             questions: {
               type: "ARRAY",
               items: {
@@ -61,8 +101,10 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
                   text: { type: "STRING" },
                   marks: { type: "STRING" },
                   type: { type: "STRING", enum: ["standard", "mcq"] },
-                  options: { type: "ARRAY", items: { type: "STRING" } }, // For MCQs
-                  has_diagram: { type: "BOOLEAN" }
+                  options: { type: "ARRAY", items: { type: "STRING" } }, 
+                  has_diagram: { type: "BOOLEAN" },
+                  // [ymin, xmin, ymax, xmax] in 0-1000 scale
+                  diagram_box_2d: { type: "ARRAY", items: { type: "NUMBER" } } 
                 },
                 required: ["number", "text", "marks", "type"]
               }
@@ -77,17 +119,19 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
 
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
-    const base64Data = await compressImage(page.uri);
-    if (!base64Data) continue;
-
+    
+    // Process image once
+    const processedImg = await compressImage(page.uri);
+    
     const masterPrompt = `
-      Analyze this exam page. Structure the output into SECTIONS.
+      Analyze this exam page. Structure into SECTIONS.
       
       RULES:
-      1. **SECTIONS:** If you see headers like "Section A", "Part 1", or distinct topics, create a new Section. If none, use "Default Section".
-      2. **MCQs:** If a question has options (A, B, C, D), set "type": "mcq" and extract options into the list.
-      3. **MATH:** Use standard LaTeX ($...$). Fix "0" vs "O" typos in Chemistry.
-      4. **LAYOUT:** If a section contains mainly short MCQs, set "layout_hint": "2-column". Long answers = "1-column".
+      1. **DIAGRAMS:** If a question has a drawing/graph, set "has_diagram": true.
+         CRITICAL: You MUST provide "diagram_box_2d": [ymin, xmin, ymax, xmax] for the diagram area. Scale 0-1000. 
+         Tight box around the drawing only.
+      2. **MCQs:** Extract options into the list.
+      3. **MATH:** Use standard LaTeX ($...$).
     `;
 
     try {
@@ -95,7 +139,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
         contents: [{
           parts: [
             { text: masterPrompt }, 
-            { inlineData: { mimeType: "image/jpeg", data: base64Data } }
+            { inlineData: { mimeType: "image/jpeg", data: processedImg.base64 } }
           ]
         }],
         generationConfig: {
@@ -108,24 +152,41 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
       const data = JSON.parse(rawText);
 
       if (data.sections) {
-        // Post-Process: Add IDs and clean text
-        const processed = data.sections.map((sec: any) => ({
+        // Process Sections
+        const processedSections = await Promise.all(data.sections.map(async (sec: any) => ({
           id: Date.now().toString() + Math.random(),
           title: sec.title || "Section",
           layout: sec.layout_hint || "1-column",
-          questions: sec.questions.map((q: any) => ({
-            id: Date.now().toString() + Math.random(),
-            number: q.number,
-            text: cleanText(q.text),
-            marks: q.marks,
-            type: q.type || 'standard',
-            options: q.options || [],
-            diagramUri: q.has_diagram ? page.uri : undefined, // Link scan if needed
-            hideText: false,
-            isFullWidth: false
+          questions: await Promise.all(sec.questions.map(async (q: any) => {
+            
+            // INTELLIGENT CROPPER
+            let finalDiagramUri = undefined;
+            if (q.has_diagram && q.diagram_box_2d && q.diagram_box_2d.length === 4) {
+               finalDiagramUri = await cropAndEnhanceDiagram(
+                 processedImg.uri, 
+                 q.diagram_box_2d, 
+                 processedImg.width, 
+                 processedImg.height
+               );
+            } else if (q.has_diagram) {
+               // Fallback if no box returned
+               finalDiagramUri = processedImg.uri; 
+            }
+
+            return {
+              id: Date.now().toString() + Math.random(),
+              number: q.number,
+              text: cleanText(q.text),
+              marks: q.marks,
+              type: q.type || 'standard',
+              options: q.options || [],
+              diagramUri: finalDiagramUri,
+              hideText: false,
+              isFullWidth: false
+            };
           }))
-        }));
-        allSections.push(...processed);
+        })));
+        allSections.push(...processedSections);
       }
       
     } catch (e: any) {
@@ -135,7 +196,5 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
     if (i < pages.length - 1) await sleep(500);
   }
 
-  // Flatten logic for the Editor (The Editor expects a Flat List of Questions OR Sections)
-  // Since we updated Editor to handle Sections, we return the sections directly.
   return { sections: allSections };
 };

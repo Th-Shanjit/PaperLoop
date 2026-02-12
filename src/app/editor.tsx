@@ -425,7 +425,12 @@ const styles = StyleSheet.create({
   mcqLabel: { fontWeight: '800', color: '#9CA3AF', marginRight: 6, fontSize: 12 },
   mcqInput: { flex: 1, paddingVertical: 8, fontSize: 13, color: '#374151' },
 
+  // DIAGRAM CONTROLS (Restored Missing Styles)
   diagramControl: { backgroundColor: '#f0fdf4', padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#dcfce7' },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  ctrlLabel: { fontSize: 12, fontWeight: '700', color: '#166534', marginBottom: 8 },
+  ctrlSub: { fontSize: 11, color: '#15803d' },
+
   qInput: { fontSize: 16, lineHeight: 24, color: '#374151', minHeight: 40, textAlignVertical: 'top' },
   dimmedInput: { opacity: 0.4, fontStyle: 'italic' },
   qImage: { width: '100%', height: 180, backgroundColor: '#f9fafb', borderRadius: 8, marginTop: 12 },
