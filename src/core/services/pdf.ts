@@ -1,127 +1,117 @@
-import * as Print from 'expo-print';
-import { shareAsync } from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Section, ExamHeader, ExamProject } from './storage';
 
-export interface ExamHeader {
-  schoolName: string;
-  examTitle: string;
-  duration: string;
-  totalMarks: string;
-  instructions: string;
-}
-
-export type TemplateType = 'simple' | 'unit_test' | 'final_exam';
-
-const processText = (text: string) => {
-  if (!text) return "";
-  let processed = text;
-
-  // 1. SEMANTIC CHEMISTRY ([CHEM: Name] -> Standard Image)
-  processed = processed.replace(/\[CHEM:([\s\S]*?)\]/g, (match, chemName) => {
-    const cleanName = chemName.trim(); 
-    const url = `https://cactus.nci.nih.gov/chemical/structure/${encodeURIComponent(cleanName)}/image?width=500&format=png`;
-    return `<div class="diagram-container"><div class="chem-label">${cleanName}</div><img src="${url}" class="chem-diagram" /></div>`;
-  });
-
-  // 2. EXPLICIT STRUCTURES ([SMILES] -> Explicit Image)
-  processed = processed.replace(/\[SMILES\]([\s\S]*?)\[\/SMILES\]/g, (match, smileCode) => {
-    const cleanSmile = smileCode.trim();
-    const url = `https://cactus.nci.nih.gov/chemical/structure/${encodeURIComponent(cleanSmile)}/image?width=500&format=png`;
-    return `<div class="diagram-container"><img src="${url}" class="chem-diagram" /></div>`;
-  });
-
-  // 3. MATH
-  processed = processed.replace(/\$(.*?)\$/g, (match, latexCode) => {
-    const cleanCode = latexCode.replace(/\n/g, ' ').trim();
-    const encoded = encodeURIComponent(cleanCode);
-    return `<img src="https://latex.codecogs.com/png.image?\\dpi{300}&space;${encoded}" class="math-latex" />`;
-  });
-
-  return processed;
+// Helper to convert base64 images
+const processImages = async (sections: Section[]) => {
+  return Promise.all(sections.map(async (sec) => {
+    const processedQs = await Promise.all(sec.questions.map(async (q) => {
+      if (q.diagramUri) {
+        try {
+          // If it's already a data URI, skip reading
+          if (q.diagramUri.startsWith('data:image')) return q;
+          
+          const b64 = await FileSystem.readAsStringAsync(q.diagramUri, { encoding: 'base64' });
+          return { ...q, imageSrc: `data:image/png;base64,${b64}` };
+        } catch (e) { return q; }
+      }
+      return q;
+    }));
+    return { ...sec, questions: processedQs };
+  }));
 };
 
-// 1. EXPOSE THE HTML GENERATOR
-// This function returns the raw HTML string for the WebView
-export const generateExamHTML = (header: ExamHeader, questions: any[], template: TemplateType = 'simple') => {
+export const generateExamHtml = async (
+  header: ExamHeader, 
+  sections: Section[], 
+  fontTheme: 'modern' | 'classic' | 'typewriter'
+) => {
   
-  const sharedStyles = `
-    .q-item { margin-bottom: 25px; page-break-inside: avoid; }
-    
-    .math-latex { 
-      height: 1.4em;      
-      vertical-align: middle; 
-      margin: 0 4px;
-    }
+  const processedSections = await processImages(sections);
 
-    .diagram-container { 
-      margin: 15px 0 15px 20px; 
-      text-align: left;
-    }
-    
-    /* The molecule image */
-    .chem-diagram { 
-      max-width: 50%; 
-      height: auto; 
-      border: 1px solid #eee; 
-      padding: 10px; 
-      border-radius: 8px; 
-      background: #fff;
-    }
-    
-    /* The name label (optional, helps verify correctness) */
-    .chem-label {
-      font-size: 10px;
-      color: #888;
-      margin-bottom: 4px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-  `;
-
-  // --- TEMPLATES ---
-  const simpleTemplate = `body { font-family: Helvetica; padding: 40px; } .header { border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; } .school { font-size: 24px; font-weight: bold; color: #2563EB; } .q-head { font-weight: bold; margin-bottom: 8px; display: flex; justify-content: space-between; } ${sharedStyles}`;
-  const unitTestTemplate = `body { font-family: 'Courier New'; padding: 20px; border: 1px solid #000; margin: 20px; } .header { text-align: center; border-bottom: 1px dashed #000; padding-bottom: 15px; margin-bottom: 20px; } .school { font-size: 22px; font-weight: bold; } .q-head { font-weight: bold; float: left; margin-right: 10px; } ${sharedStyles}`;
-  const finalExamTemplate = `body { font-family: 'Times New Roman'; padding: 50px; } .header { text-align: center; margin-bottom: 30px; } .school { font-size: 28px; font-weight: bold; text-decoration: underline; } .q-head { font-weight: bold; margin-bottom: 8px; } ${sharedStyles}`;
-
-  let selectedCss = simpleTemplate;
-  if (template === 'unit_test') selectedCss = unitTestTemplate;
-  if (template === 'final_exam') selectedCss = finalExamTemplate;
+  const fontImport = fontTheme === 'classic' 
+    ? "@import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@300;700&display=swap'); body { font-family: 'Merriweather', serif; }"
+    : fontTheme === 'typewriter'
+    ? "@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap'); body { font-family: 'Courier Prime', monospace; }"
+    : "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'); body { font-family: 'Inter', sans-serif; }";
 
   return `
-    <!DOCTYPE html>
     <html>
-    <head>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <style>${selectedCss}</style>
-    </head>
-    <body>
-      <div class="header">
-        <div class="school">${header.schoolName || 'School Name'}</div>
-        <div class="meta"><span>${header.examTitle || 'Test'}</span></div>
-      </div>
-      
-      <div class="questions">
-        ${questions.map((q) => `
-          <div class="q-item">
-            <div class="q-head">
-              <span>Q${q.id || '?'}.</span>
-              <span class="marks">(${q.marks})</span>
-            </div>
-            <div class="q-text">${processText(q.text)}</div> 
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+        <script>document.addEventListener("DOMContentLoaded",()=>{document.body.innerHTML=document.body.innerHTML.replace(/\\\\\\$/g,'$');});</script>
+        <script>window.MathJax={tex:{inlineMath:[['$','$'],['\\\\(','\\\\)']],displayMath:[['$$','$$']]},svg:{fontCache:'global'},startup:{pageReady:()=>MathJax.startup.defaultPageReady()}};</script>
+        <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <style>
+          ${fontImport}
+          * { box-sizing: border-box; }
+          body { padding: 20px; color: #111; max-width: 800px; margin: 0 auto; background: white; }
+          
+          /* HEADER */
+          .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #111; padding-bottom: 20px; }
+          .school-name { font-size: 24px; font-weight: 800; text-transform: uppercase; margin-bottom: 5px; letter-spacing: 1px; }
+          .exam-title { font-size: 16px; font-weight: 500; margin-bottom: 15px; color: #444; }
+          .meta-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 12px; text-transform: uppercase; }
+          .instructions { background: #f8f9fa; padding: 10px; font-size: 11px; margin-bottom: 30px; border-left: 4px solid #111; line-height: 1.5; }
+          
+          /* LAYOUT */
+          .section-container { margin-bottom: 30px; }
+          .section-title { font-size: 14px; font-weight: 800; text-transform: uppercase; margin-bottom: 15px; padding-bottom: 5px; border-bottom: 1px solid #ddd; }
+          
+          .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 15px; } 
+          .span-all { column-span: all; display: block; margin-bottom: 20px; }
+          
+          .q-row { display: flex; flex-direction: row; }
+          .q-num { width: 30px; font-weight: 800; font-size: 14px; flex-shrink: 0; }
+          .q-content { flex: 1; }
+          .q-text { white-space: pre-wrap; line-height: 1.5; font-size: 13px; margin-bottom: 8px; }
+          .q-marks { width: 30px; text-align: right; font-weight: 700; font-size: 12px; }
+          
+          /* COMPONENTS */
+          .mcq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 5px; }
+          .mcq-opt { font-size: 12px; display: flex; align-items: flex-start; }
+          .mcq-idx { font-weight: bold; margin-right: 5px; }
+          
+          .diagram-img { display: block; max-width: 100%; max-height: 200px; margin-top: 5px; border: 1px solid #eee; }
+          mjx-container { display: inline-block !important; margin: 0 !important; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="school-name">${header.schoolName}</div>
+          <div class="exam-title">${header.title}</div>
+          <div class="meta-row"><span>Duration: ${header.duration}</span><span>Max Marks: ${header.totalMarks}</span></div>
+        </div>
+        ${header.instructions ? `<div class="instructions"><strong>INSTRUCTIONS:</strong><br/>${header.instructions.replace(/\n/g, '<br/>')}</div>` : ''}
+        
+        ${processedSections.map(sec => `
+          <div class="section-container">
+             <div class="section-title">${sec.title}</div>
+             <div style="column-count: ${sec.layout === '2-column' ? 2 : 1}; column-gap: 30px;">
+               ${sec.questions.map((q, idx) => `
+                  <div class="q-item ${q.isFullWidth ? 'span-all' : ''}">
+                    <div class="q-row">
+                      <div class="q-num">${idx+1}.</div>
+                      <div class="q-content">
+                        ${!q.hideText ? `<div class="q-text">${q.text}</div>` : ''}
+                        
+                        ${q.type === 'mcq' && q.options ? `
+                           <div class="mcq-grid">
+                             ${q.options.map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97+i)})</span> ${opt || ''}</div>`).join('')}
+                           </div>
+                        ` : ''}
+
+                        ${(q as any).imageSrc ? `<img src="${(q as any).imageSrc}" class="diagram-img" />` : ''}
+                      </div>
+                      <div class="q-marks">[ ${q.marks} ]</div>
+                    </div>
+                  </div>
+               `).join('')}
+             </div>
           </div>
         `).join('')}
-      </div>
-    </body>
+        
+        <div style="margin-top:60px; text-align:center; font-size:9px; color:#aaa; letter-spacing:1px; clear:both;">GENERATED BY PAPERLOOP</div>
+      </body>
     </html>
   `;
-};
-
-// 2. THE FILE SAVER (Wraps the generator)
-export const generateExamPDF = async (header: ExamHeader, questions: any[], template: TemplateType = 'simple') => {
-  try {
-    const html = generateExamHTML(header, questions, template);
-    const { uri } = await Print.printToFileAsync({ html });
-    await shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
-  } catch (error) {
-    console.error('PDF Generation Error:', error);
-  }
 };
