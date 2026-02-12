@@ -89,9 +89,9 @@ export default function WorkspaceScreen() {
     
     try {
       const result = await transcribeHandwriting(pages);
-      const processedQuestions = [];
-
-      for (const q of result.questions) {
+      
+      // Process diagrams for cropping (works for both sections and questions)
+      const processDiagramCrop = async (q: any) => {
         let finalQ = { ...q };
         if (q.has_diagram && q.box_2d && q.pageUri) {
           try {
@@ -136,13 +136,49 @@ export default function WorkspaceScreen() {
             finalQ.diagramUri = cropResult.uri;
           } catch (e) { console.error("Crop Failed", e); }
         }
-        processedQuestions.push(finalQ);
-      }
+        return finalQ;
+      };
 
-      router.push({
-        pathname: "/editor",
-        params: { initialData: JSON.stringify(processedQuestions) }
-      });
+      // Check if we have sections (new format) or questions (old format)
+      if (result.sections && result.sections.length > 0) {
+        // NEW FORMAT: Process sections
+        const processedSections = [];
+        for (const section of result.sections) {
+          const processedQuestions = [];
+          for (const q of section.questions) {
+            const processed = await processDiagramCrop(q);
+            processedQuestions.push(processed);
+          }
+          processedSections.push({
+            ...section,
+            questions: processedQuestions
+          });
+        }
+
+        // PASS SECTIONS: The AI gave us structured data (Layer 4)
+        router.push({
+          pathname: "/editor",
+          params: { 
+            initialData: JSON.stringify(processedSections), // Pass the SECTIONS array
+            isSectionData: "true" // Flag to tell Editor this is new data
+          }
+        });
+      } else if (result.questions) {
+        // OLD FORMAT: Process flat questions list
+        const processedQuestions = [];
+        for (const q of result.questions) {
+          const processed = await processDiagramCrop(q);
+          processedQuestions.push(processed);
+        }
+
+        // FALLBACK: Old behavior
+        router.push({
+          pathname: "/editor",
+          params: { initialData: JSON.stringify(processedQuestions) }
+        });
+      } else {
+        Alert.alert("Error", "No questions detected.");
+      }
 
     } catch (e) {
       Alert.alert("Analysis Failed", "Please try again.");

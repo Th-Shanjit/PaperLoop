@@ -191,38 +191,64 @@ export default function EditorScreen() {
 
   useEffect(() => {
     const init = async () => {
+      // 1. OPEN SAVED DRAFT
       if (projectId) {
         const saved = await getProject(projectId);
         if (saved) {
           setHeader(saved.header);
           setFontTheme(saved.settings?.fontTheme || 'modern');
+          
           if (saved.sections && saved.sections.length > 0) {
             setSections(saved.sections);
           } else if (saved.questions && saved.questions.length > 0) {
+            // Migration: Old Flat List -> Default Section
             setSections([{
               id: 'default_section', title: 'Section A', layout: '1-column',
               questions: saved.questions.map(q => ({...q, type: 'standard'}))
             }]);
-          } else {
-             setSections([{ id: Date.now().toString(), title: 'Section A', layout: '1-column', questions: [] }]);
           }
           setCurrentProjectId(saved.id);
         }
       } 
+      // 2. NEW SCAN (From Camera)
       else if (initialData) {
         try {
           const parsed = JSON.parse(initialData);
-          const formatted = parsed.map((q: any, index: number) => ({
-            id: Date.now().toString() + index, number: "", text: q.question_text || "", 
-            marks: (q.marks || "5").toString(), diagramUri: q.diagramUri, 
-            hideText: q.has_diagram ? true : false, isFullWidth: false, type: 'standard'
-          }));
-          const newSection: Section = {
-            id: Date.now().toString(), title: 'Section A', layout: '1-column', questions: formatted
-          };
-          setSections([newSection]);
-          saveToDrafts([newSection], header, fontTheme);
-        } catch (e) { Alert.alert("Error", "Could not load scan data"); }
+          
+          // CHECK: Did we receive Sections (New) or Questions (Old)?
+          // We check if the first item has a 'questions' array inside it.
+          const isSectionData = parsed.length > 0 && parsed[0].questions;
+
+          if (isSectionData) {
+            // CASE A: We got Sections (Gemini Layer 4) -> Use directly
+            setSections(parsed);
+            saveToDrafts(parsed, header, fontTheme);
+          } else {
+            // CASE B: We got Questions (Fallback) -> Wrap in Default Section
+            const formatted = parsed.map((q: any, index: number) => ({
+              id: Date.now().toString() + index, 
+              number: q.question_number || (index + 1).toString(), // Handle varying keys
+              text: q.text || q.question_text || "", 
+              marks: (q.marks || "5").toString(), 
+              diagramUri: q.diagramUri, 
+              hideText: q.has_diagram ? true : false, 
+              isFullWidth: false, 
+              type: q.type || 'standard',
+              options: q.options || []
+            }));
+            
+            const newSection: Section = {
+              id: Date.now().toString(), 
+              title: 'Section A', 
+              layout: '1-column', 
+              questions: formatted
+            };
+            setSections([newSection]);
+            saveToDrafts([newSection], header, fontTheme);
+          }
+        } catch (e) { 
+          Alert.alert("Error", "Could not load scan data"); 
+        }
       }
     };
     init();
