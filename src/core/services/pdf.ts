@@ -1,15 +1,12 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { Section, ExamHeader, ExamProject } from './storage';
+import { Section, ExamHeader } from './storage';
 
-// Helper to convert base64 images
 const processImages = async (sections: Section[]) => {
   return Promise.all(sections.map(async (sec) => {
     const processedQs = await Promise.all(sec.questions.map(async (q) => {
       if (q.diagramUri) {
         try {
-          // If it's already a data URI, skip reading
           if (q.diagramUri.startsWith('data:image')) return q;
-          
           const b64 = await FileSystem.readAsStringAsync(q.diagramUri, { encoding: 'base64' });
           return { ...q, imageSrc: `data:image/png;base64,${b64}` };
         } catch (e) { return q; }
@@ -35,44 +32,82 @@ export const generateExamHtml = async (
     : "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'); body { font-family: 'Inter', sans-serif; }";
 
   return `
+    <!DOCTYPE html>
     <html>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-        <script>document.addEventListener("DOMContentLoaded",()=>{document.body.innerHTML=document.body.innerHTML.replace(/\\\\\\$/g,'$');});</script>
-        <script>window.MathJax={tex:{inlineMath:[['$','$'],['\\\\(','\\\\)']],displayMath:[['$$','$$']]},svg:{fontCache:'global'},startup:{pageReady:()=>MathJax.startup.defaultPageReady()}};</script>
-        <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+        <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/mhchem.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+        <script>
+          document.addEventListener("DOMContentLoaded", function() {
+            // Render Math immediately
+            renderMathInElement(document.body, {
+              delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false}
+              ],
+              throwOnError: false,
+              strict: false, // Prevents crashing on minor LaTeX typos
+              trust: true
+            });
+
+            // SAFETY NET: Force PDF engine to wait for fonts to load
+            document.fonts.ready.then(function() {
+               // Add a hidden div to signal to Expo Print that we are ready
+               var readyDiv = document.createElement('div');
+               readyDiv.id = 'print-ready';
+               document.body.appendChild(readyDiv);
+            });
+          });
+        </script>
+
         <style>
           ${fontImport}
           * { box-sizing: border-box; }
-          body { padding: 20px; color: #111; max-width: 800px; margin: 0 auto; background: white; }
+          
+          /* CRITICAL FIX: A4 Print Rules & Point (pt) Typography */
+          @page { size: A4; margin: 15mm; }
+          
+          body { 
+            color: #111; 
+            background: white; 
+            font-size: 12pt; /* Base font size */
+            line-height: 1.5;
+            margin: 0;
+            padding: 0;
+          }
           
           /* HEADER */
-          .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #111; padding-bottom: 20px; }
-          .school-name { font-size: 24px; font-weight: 800; text-transform: uppercase; margin-bottom: 5px; letter-spacing: 1px; }
-          .exam-title { font-size: 16px; font-weight: 500; margin-bottom: 15px; color: #444; }
-          .meta-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 12px; text-transform: uppercase; }
-          .instructions { background: #f8f9fa; padding: 10px; font-size: 11px; margin-bottom: 30px; border-left: 4px solid #111; line-height: 1.5; }
+          .header { text-align: center; margin-bottom: 20pt; border-bottom: 2pt solid #111; padding-bottom: 15pt; }
+          .school-name { font-size: 16pt; font-weight: 800; text-transform: uppercase; margin-bottom: 4pt; letter-spacing: 1px; }
+          .exam-title { font-size: 14pt; font-weight: 500; margin-bottom: 10pt; color: #444; }
+          .meta-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 11pt; text-transform: uppercase; }
+          .instructions { background: #f8f9fa; padding: 10pt; font-size: 11pt; margin-bottom: 20pt; border-left: 3pt solid #111; }
           
           /* LAYOUT */
-          .section-container { margin-bottom: 30px; }
-          .section-title { font-size: 14px; font-weight: 800; text-transform: uppercase; margin-bottom: 15px; padding-bottom: 5px; border-bottom: 1px solid #ddd; }
+          .section-container { margin-bottom: 20pt; }
+          .section-title { font-size: 13pt; font-weight: 800; text-transform: uppercase; margin-bottom: 12pt; padding-bottom: 4pt; border-bottom: 1pt solid #ddd; }
           
-          .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 15px; } 
-          .span-all { column-span: all; display: block; margin-bottom: 20px; }
+          .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 15pt; } 
+          .span-all { column-span: all; display: block; margin-bottom: 15pt; }
           
-          .q-row { display: flex; flex-direction: row; }
-          .q-num { width: 30px; font-weight: 800; font-size: 14px; flex-shrink: 0; }
-          .q-content { flex: 1; }
-          .q-text { white-space: pre-wrap; line-height: 1.5; font-size: 13px; margin-bottom: 8px; }
-          .q-marks { width: 30px; text-align: right; font-weight: 700; font-size: 12px; }
+          .q-row { display: flex; flex-direction: row; justify-content: space-between; }
+          .q-num { width: 25pt; font-weight: 800; font-size: 12pt; flex-shrink: 0; }
+          .q-content { flex: 1; padding-right: 10pt; }
+          .q-text { white-space: pre-wrap; font-size: 12pt; margin-bottom: 8pt; margin-top: 0; }
+          
+          /* Marks locked to the right side */
+          .q-marks { width: 35pt; text-align: right; font-weight: 700; font-size: 11pt; white-space: nowrap; }
           
           /* COMPONENTS */
-          .mcq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 5px; }
-          .mcq-opt { font-size: 12px; display: flex; align-items: flex-start; }
-          .mcq-idx { font-weight: bold; margin-right: 5px; }
+          .mcq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt; margin-top: 5pt; }
+          .mcq-opt { font-size: 12pt; display: flex; align-items: flex-start; }
+          .mcq-idx { font-weight: bold; margin-right: 5pt; }
           
-          .diagram-img { display: block; max-width: 100%; max-height: 200px; margin-top: 5px; border: 1px solid #eee; }
-          mjx-container { display: inline-block !important; margin: 0 !important; }
+          .diagram-img { display: block; max-width: 100%; max-height: 200px; margin-top: 5pt; border: 1px solid #eee; }
         </style>
       </head>
       <body>
@@ -86,17 +121,17 @@ export const generateExamHtml = async (
         ${processedSections.map(sec => `
           <div class="section-container">
              <div class="section-title">${sec.title}</div>
-             <div style="column-count: ${sec.layout === '2-column' ? 2 : 1}; column-gap: 30px;">
+             <div style="column-count: ${sec.layout === '2-column' ? 2 : 1}; column-gap: 25pt;">
                ${sec.questions.map((q, idx) => `
                   <div class="q-item ${q.isFullWidth ? 'span-all' : ''}">
                     <div class="q-row">
                       <div class="q-num">${idx+1}.</div>
                       <div class="q-content">
-                        ${!q.hideText ? `<div class="q-text">${q.text}</div>` : ''}
+                        ${!q.hideText ? `<p class="q-text">${q.text}</p>` : ''}
                         
                         ${q.type === 'mcq' && q.options ? `
                            <div class="mcq-grid">
-                             ${q.options.map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97+i)})</span> ${opt || ''}</div>`).join('')}
+                             ${q.options.map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97+i)})</span> <span>${opt || ''}</span></div>`).join('')}
                            </div>
                         ` : ''}
 
@@ -110,7 +145,7 @@ export const generateExamHtml = async (
           </div>
         `).join('')}
         
-        <div style="margin-top:60px; text-align:center; font-size:9px; color:#aaa; letter-spacing:1px; clear:both;">GENERATED BY PAPERLOOP</div>
+        <div style="margin-top:40pt; text-align:center; font-size:8pt; color:#aaa; letter-spacing:1px; clear:both;">GENERATED BY PAPERLOOP</div>
       </body>
     </html>
   `;

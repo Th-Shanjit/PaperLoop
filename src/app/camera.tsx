@@ -4,7 +4,8 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker'; 
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { 
   addPageToSession, 
@@ -74,12 +75,29 @@ export default function CameraScreen() {
     }
   };
 
-  const handleRotate = () => {
+  const handleRotate = async () => {
     if (reviewIndex !== null) {
-      const currentPage = pages[reviewIndex];
-      const newRotation = (currentPage.rotation + 90) % 360;
-      updatePageInSession(reviewIndex, { rotation: newRotation });
-      refreshPages();
+      try {
+        const currentPage = pages[reviewIndex];
+        
+        // CRITICAL FIX: Physically rotate the image file instead of just CSS
+        const result = await ImageManipulator.manipulateAsync(
+          currentPage.uri,
+          [{ rotate: 90 }],
+          { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+        );
+
+        updatePageInSession(reviewIndex, { 
+          uri: result.uri, 
+          width: result.width, 
+          height: result.height,
+          rotation: 0 // Reset CSS rotation since file is actually rotated
+        });
+        
+        refreshPages();
+      } catch (e) {
+        Alert.alert("Error", "Could not rotate image.");
+      }
     }
   };
 
