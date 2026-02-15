@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as ImageManipulator from 'expo-image-manipulator';
 
-const MODEL_ID = 'gemini-2.5-flash-lite'; 
+const MODEL_ID = 'gemini-3-flash-preview'; 
 
 interface ScannedPage {
   uri: string;
@@ -25,7 +25,8 @@ const compressImage = async (uri: string): Promise<{ base64: string, width: numb
   }
 };
 
-// CRITICAL FIX: Do not manipulate backslashes. Let the JSON parser handle it naturally.
+// CRITICAL FIX: Removed the destructive replace(). 
+// Let the JSON parser handle the raw text so \ce{} stays intact.
 const cleanText = (text: string): string => {
   if (!text) return "";
   return text.trim(); 
@@ -57,7 +58,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
                   marks: { type: "STRING" },
                   type: { type: "STRING", enum: ["standard", "mcq"] },
                   options: { type: "ARRAY", items: { type: "STRING" } }, 
-                  has_diagram: { type: "BOOLEAN" }
+                  has_diagram: { type: "BOOLEAN" } 
                 },
                 required: ["number", "text", "marks", "type"]
               }
@@ -74,15 +75,15 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
     const page = pages[i];
     const processedImg = await compressImage(page.uri);
     
-    // CRITICAL FIX: A Balanced Prompt. Smart enough to read, strict enough to format.
     const masterPrompt = `
-      Transcribe this handwritten exam page into structured SECTIONS.
-      
+      Task: You are a strict OCR transcription engine processing an exam paper. 
+
       RULES:
-      1. **TRANSCRIPTION:** Read carefully. Use context to decipher messy handwriting. Do not invent questions that are not on the page.
-      2. **MATH & CHEM:** Use $...$ for inline math and $$...$$ for block math. You MUST use \\ce{...} for chemistry equations (e.g. $\\ce{H2O}$). 
-      3. **DIAGRAMS:** If a question relies on a drawn figure or graph, set "has_diagram": true.
-      4. **MCQs:** Extract multiple choice options into the "options" list.
+      1. TRANSCRIBE EXACTLY: Read carefully and transcribe what is on the page. Do NOT invent, guess, or repeat generic questions.
+      2. UNREADABLE TEXT: If handwriting is completely illegible, write "[illegible]". Do not guess.
+      3. MATH & CHEM: Use $...$ for inline math and $$...$$ for block math. You MUST use \\ce{...} for chemistry equations (e.g., $\\ce{H2O}$).
+      4. DIAGRAMS: If a question relies on a drawn figure or graph, set "has_diagram": true.
+      5. MCQs: Extract multiple choice options into the "options" list.
     `;
 
     try {
@@ -96,7 +97,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
         generationConfig: {
           responseMimeType: "application/json",
           responseSchema: responseSchema,
-          temperature: 0.2 // Balanced temperature to allow for reading cursive/messy math without hallucinating.
+          temperature: 0.1 
         }
       });
 
@@ -105,24 +106,22 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
       const data = JSON.parse(rawText);
 
       if (data.sections) {
-        const processedSections = await Promise.all(data.sections.map(async (sec: any) => ({
+        const processedSections = data.sections.map((sec: any) => ({
           id: Date.now().toString() + Math.random(),
           title: sec.title || "Section",
           layout: sec.layout_hint || "1-column",
-          questions: await Promise.all(sec.questions.map(async (q: any) => {
-            return {
-              id: Date.now().toString() + Math.random(),
-              number: q.number, 
-              text: cleanText(q.text), 
-              marks: q.marks,
-              type: q.type || 'standard', 
-              options: q.options || [],
-              diagramUri: q.has_diagram ? "NEEDS_CROP" : undefined, 
-              hideText: false, 
-              isFullWidth: false
-            };
+          questions: sec.questions.map((q: any) => ({
+            id: Date.now().toString() + Math.random(),
+            number: q.number || "",
+            text: cleanText(q.text), 
+            marks: q.marks || "",
+            type: q.type || 'standard', 
+            options: q.options || [],
+            diagramUri: q.has_diagram ? "NEEDS_CROP" : undefined, 
+            hideText: false, 
+            isFullWidth: false
           }))
-        })));
+        }));
         allSections.push(...processedSections);
       }
     } catch (e: any) {
