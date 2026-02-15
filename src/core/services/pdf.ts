@@ -4,7 +4,7 @@ import { Section, ExamHeader } from './storage';
 const processImages = async (sections: Section[]) => {
   return Promise.all(sections.map(async (sec) => {
     const processedQs = await Promise.all(sec.questions.map(async (q) => {
-      if (q.diagramUri) {
+      if (q.diagramUri && q.diagramUri !== "NEEDS_CROP") {
         try {
           if (q.diagramUri.startsWith('data:image')) return q;
           const b64 = await FileSystem.readAsStringAsync(q.diagramUri, { encoding: 'base64' });
@@ -41,73 +41,54 @@ export const generateExamHtml = async (
         <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/mhchem.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+        
         <script>
           document.addEventListener("DOMContentLoaded", function() {
-            // Render Math immediately
-            renderMathInElement(document.body, {
-              delimiters: [
-                {left: '$$', right: '$$', display: true},
-                {left: '$', right: '$', display: false}
-              ],
-              throwOnError: false,
-              strict: false, // Prevents crashing on minor LaTeX typos
-              trust: true
-            });
-
-            // SAFETY NET: Force PDF engine to wait for fonts to load
-            document.fonts.ready.then(function() {
-               // Add a hidden div to signal to Expo Print that we are ready
-               var readyDiv = document.createElement('div');
-               readyDiv.id = 'print-ready';
-               document.body.appendChild(readyDiv);
-            });
+            if (typeof renderMathInElement !== 'undefined') {
+              renderMathInElement(document.body, {
+                delimiters: [
+                  {left: '$$', right: '$$', display: true},
+                  {left: '$', right: '$', display: false}
+                ],
+                throwOnError: false, // Prevents crashing on typos
+                strict: false
+              });
+            }
           });
         </script>
 
         <style>
           ${fontImport}
           * { box-sizing: border-box; }
-          
-          /* CRITICAL FIX: A4 Print Rules & Point (pt) Typography */
           @page { size: A4; margin: 15mm; }
-          
-          body { 
-            color: #111; 
-            background: white; 
-            font-size: 12pt; /* Base font size */
-            line-height: 1.5;
-            margin: 0;
-            padding: 0;
-          }
-          
-          /* HEADER */
+          body { color: #111; background: white; font-size: 12pt; line-height: 1.5; margin: 0; padding: 0; }
           .header { text-align: center; margin-bottom: 20pt; border-bottom: 2pt solid #111; padding-bottom: 15pt; }
           .school-name { font-size: 16pt; font-weight: 800; text-transform: uppercase; margin-bottom: 4pt; letter-spacing: 1px; }
           .exam-title { font-size: 14pt; font-weight: 500; margin-bottom: 10pt; color: #444; }
           .meta-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 11pt; text-transform: uppercase; }
           .instructions { background: #f8f9fa; padding: 10pt; font-size: 11pt; margin-bottom: 20pt; border-left: 3pt solid #111; }
-          
-          /* LAYOUT */
           .section-container { margin-bottom: 20pt; }
           .section-title { font-size: 13pt; font-weight: 800; text-transform: uppercase; margin-bottom: 12pt; padding-bottom: 4pt; border-bottom: 1pt solid #ddd; }
-          
           .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 15pt; } 
           .span-all { column-span: all; display: block; margin-bottom: 15pt; }
-          
           .q-row { display: flex; flex-direction: row; justify-content: space-between; }
           .q-num { width: 25pt; font-weight: 800; font-size: 12pt; flex-shrink: 0; }
           .q-content { flex: 1; padding-right: 10pt; }
           .q-text { white-space: pre-wrap; font-size: 12pt; margin-bottom: 8pt; margin-top: 0; }
-          
-          /* Marks locked to the right side */
           .q-marks { width: 35pt; text-align: right; font-weight: 700; font-size: 11pt; white-space: nowrap; }
-          
-          /* COMPONENTS */
           .mcq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt; margin-top: 5pt; }
           .mcq-opt { font-size: 12pt; display: flex; align-items: flex-start; }
           .mcq-idx { font-weight: bold; margin-right: 5pt; }
           
-          .diagram-img { display: block; max-width: 100%; max-height: 200px; margin-top: 5pt; border: 1px solid #eee; }
+          /* CamScanner Effect */
+          .diagram-img { 
+            display: block; 
+            max-width: 100%; 
+            max-height: 300px; 
+            margin-top: 10pt; 
+            border: 1px solid #eee; 
+            filter: grayscale(100%) contrast(150%) brightness(110%);
+          }
         </style>
       </head>
       <body>

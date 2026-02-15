@@ -25,43 +25,10 @@ const compressImage = async (uri: string): Promise<{ base64: string, width: numb
   }
 };
 
-const cropAndEnhanceDiagram = async (originalUri: string, box: number[], imgWidth: number, imgHeight: number) => {
-  try {
-    const [ymin, xmin, ymax, xmax] = box;
-    
-    const originX = Math.round((xmin / 1000) * imgWidth);
-    const originY = Math.round((ymin / 1000) * imgHeight);
-    const width = Math.round(((xmax - xmin) / 1000) * imgWidth);
-    const height = Math.round(((ymax - ymin) / 1000) * imgHeight);
-
-    if (width <= 0 || height <= 0) throw new Error("Invalid crop dimensions");
-
-    // CRITICAL FIX: Increased padding from 10 to 40 pixels for a safer, wider crop margin
-    const PADDING = 40;
-    const safeX = Math.max(0, originX - PADDING);
-    const safeY = Math.max(0, originY - PADDING);
-    const safeW = Math.round(Math.min(imgWidth - safeX, width + (PADDING * 2)));
-    const safeH = Math.round(Math.min(imgHeight - safeY, height + (PADDING * 2)));
-
-    const result = await ImageManipulator.manipulateAsync(
-      originalUri,
-      [
-        { crop: { originX: safeX, originY: safeY, width: safeW, height: safeH } },
-        { resize: { width: Math.min(safeW, 800) } }, 
-      ],
-      { compress: 0.8, format: ImageManipulator.SaveFormat.PNG }
-    );
-    return result.uri;
-  } catch (e) {
-    console.warn("Auto-Crop Failed, returning original image:", e);
-    return originalUri; 
-  }
-};
-
+// CRITICAL FIX: Do not manipulate backslashes. Let the JSON parser handle it naturally.
 const cleanText = (text: string): string => {
   if (!text) return "";
-  // Safely escape backslashes so they survive the JS -> HTML transition
-  return text.replace(/\\/g, '\\\\').replace(/`/g, '\\`'); 
+  return text.trim(); 
 };
 
 export const transcribeHandwriting = async (pages: ScannedPage[]) => {
@@ -90,8 +57,7 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
                   marks: { type: "STRING" },
                   type: { type: "STRING", enum: ["standard", "mcq"] },
                   options: { type: "ARRAY", items: { type: "STRING" } }, 
-                  has_diagram: { type: "BOOLEAN" },
-                  diagram_box_2d: { type: "ARRAY", items: { type: "NUMBER" } } 
+                  has_diagram: { type: "BOOLEAN" }
                 },
                 required: ["number", "text", "marks", "type"]
               }
@@ -108,13 +74,15 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
     const page = pages[i];
     const processedImg = await compressImage(page.uri);
     
+    // CRITICAL FIX: A Balanced Prompt. Smart enough to read, strict enough to format.
     const masterPrompt = `
-      Analyze this exam page. Structure into SECTIONS.
+      Transcribe this handwritten exam page into structured SECTIONS.
       
       RULES:
-      1. **DIAGRAMS:** If a question has a drawing/graph, set "has_diagram": true and provide "diagram_box_2d": [ymin, xmin, ymax, xmax] (Scale 0-1000). Tight box around the drawing only.
-      2. **MCQs:** Extract options into the list.
-      3. **MATH & CHEM:** You MUST use strictly $...$ for inline math and $$...$$ for block math. DO NOT use \\( or \\[. For chemistry formulas, use $\\ce{...}$ strictly inside dollar signs.
+      1. **TRANSCRIPTION:** Read carefully. Use context to decipher messy handwriting. Do not invent questions that are not on the page.
+      2. **MATH & CHEM:** Use $...$ for inline math and $$...$$ for block math. You MUST use \\ce{...} for chemistry equations (e.g. $\\ce{H2O}$). 
+      3. **DIAGRAMS:** If a question relies on a drawn figure or graph, set "has_diagram": true.
+      4. **MCQs:** Extract multiple choice options into the "options" list.
     `;
 
     try {
@@ -127,7 +95,8 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
         }],
         generationConfig: {
           responseMimeType: "application/json",
-          responseSchema: responseSchema
+          responseSchema: responseSchema,
+          temperature: 0.2 // Balanced temperature to allow for reading cursive/messy math without hallucinating.
         }
       });
 
@@ -141,20 +110,16 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
           title: sec.title || "Section",
           layout: sec.layout_hint || "1-column",
           questions: await Promise.all(sec.questions.map(async (q: any) => {
-            let finalDiagramUri = undefined;
-            if (q.has_diagram && q.diagram_box_2d && q.diagram_box_2d.length === 4) {
-               finalDiagramUri = await cropAndEnhanceDiagram(
-                 processedImg.uri, q.diagram_box_2d, processedImg.width, processedImg.height
-               );
-            } else if (q.has_diagram) {
-               finalDiagramUri = processedImg.uri; 
-            }
-
             return {
               id: Date.now().toString() + Math.random(),
-              number: q.number, text: cleanText(q.text), marks: q.marks,
-              type: q.type || 'standard', options: q.options || [],
-              diagramUri: finalDiagramUri, hideText: false, isFullWidth: false
+              number: q.number, 
+              text: cleanText(q.text), 
+              marks: q.marks,
+              type: q.type || 'standard', 
+              options: q.options || [],
+              diagramUri: q.has_diagram ? "NEEDS_CROP" : undefined, 
+              hideText: false, 
+              isFullWidth: false
             };
           }))
         })));

@@ -6,25 +6,16 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { WebView } from 'react-native-webview'; // THE NEW POWER TOOL
+import { WebView } from 'react-native-webview';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker'; 
 import { transcribeHandwriting } from '../core/services/gemini'; 
 import { saveProject, getProject, ExamProject, Section, Question } from '../core/services/storage'; 
-import { generateExamHtml } from '../core/services/pdf'; // THE SHARED RENDERER
+import { generateExamHtml } from '../core/services/pdf';
 
-// --- SUB-COMPONENTS (Keep HeaderEditor, QuestionCard, SectionCard as is) ---
-// (I will omit the full code of sub-components here to save space, 
-//  BUT YOU SHOULD KEEP THEM EXACTLY AS THEY WERE IN THE PREVIOUS STEP. 
-//  Copy them back in if you are doing a full file replace.)
-
-// ... [INSERT HeaderEditor HERE] ...
-// ... [INSERT QuestionCard HERE] ...
-// ... [INSERT SectionCard HERE] ...
-
-// RE-INSERTING SUB-COMPONENTS FOR SAFETY (Just copy-paste this block)
+// --- SUB-COMPONENTS ---
 const HeaderEditor = memo(({ header, onChange }: { header: any, onChange: (h: any) => void }) => (
   <View style={styles.headerCard}>
     <TextInput style={styles.schoolInput} value={header.schoolName} onChangeText={t => onChange({...header, schoolName: t})} placeholder="SCHOOL NAME" />
@@ -38,12 +29,13 @@ const HeaderEditor = memo(({ header, onChange }: { header: any, onChange: (h: an
 ));
 
 const QuestionCard = memo(({ 
-  item, sectionId, onUpdate, onDelete, onMove 
+  item, sectionId, onUpdate, onDelete, onMove, onPickDiagram 
 }: { 
   item: Question, sectionId: string, 
   onUpdate: (sId: string, qId: string, field: keyof Question, val: any) => void,
   onDelete: (sId: string, qId: string) => void,
-  onMove: (sId: string, idx: number, dir: 'up' | 'down') => void
+  onMove: (sId: string, idx: number, dir: 'up' | 'down') => void,
+  onPickDiagram: (sId: string, qId: string) => void
 }) => {
   const updateOption = (idx: number, text: string) => {
     const newOptions = [...(item.options || ["", "", "", ""])];
@@ -63,7 +55,9 @@ const QuestionCard = memo(({
           <TouchableOpacity onPress={() => onDelete(sectionId, item.id)} style={[styles.toolBtn, {backgroundColor:'#fee2e2'}]}><Ionicons name="trash" size={16} color="#dc2626" /></TouchableOpacity>
         </View>
       </View>
+
       <TextInput style={[styles.qInput, item.hideText && styles.dimmedInput]} value={item.text} onChangeText={t => onUpdate(sectionId, item.id, 'text', t)} multiline editable={!item.hideText} placeholder="Question text..." />
+      
       {item.type === 'mcq' && !item.hideText && (
         <View style={styles.mcqContainer}>
           <View style={styles.mcqRow}>
@@ -76,13 +70,28 @@ const QuestionCard = memo(({
           </View>
         </View>
       )}
-      {item.diagramUri && (
+
+      {/* NEW NATIVE CROPPER UI */}
+      {!item.diagramUri || item.diagramUri === "NEEDS_CROP" ? (
+        <TouchableOpacity 
+          onPress={() => onPickDiagram(sectionId, item.id)} 
+          style={[styles.addDiagramBtn, item.diagramUri === "NEEDS_CROP" && styles.addDiagramBtnHighlight]}
+        >
+           <Ionicons name={item.diagramUri === "NEEDS_CROP" ? "scan-outline" : "image-outline"} size={18} color={item.diagramUri === "NEEDS_CROP" ? "#2563EB" : "#6B7280"} />
+           <Text style={[styles.addDiagramText, item.diagramUri === "NEEDS_CROP" && styles.addDiagramTextHighlight]}>
+             {item.diagramUri === "NEEDS_CROP" ? "AI Detected Diagram (Tap to crop)" : "Add Diagram"}
+           </Text>
+        </TouchableOpacity>
+      ) : (
         <View>
           <Image source={{ uri: item.diagramUri }} style={[styles.qImage, item.hideText && {borderColor:'#2563EB', borderWidth:2}]} resizeMode="contain" />
            <View style={styles.diagramControl}>
              <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
                 <Text style={styles.ctrlSub}>Settings</Text>
-                <View style={{flexDirection:'row', gap:12}}>
+                <View style={{flexDirection:'row', gap:12, alignItems: 'center'}}>
+                  <TouchableOpacity onPress={() => onPickDiagram(sectionId, item.id)} style={{marginRight: 10}}>
+                    <Ionicons name="crop" size={18} color="#2563EB" />
+                  </TouchableOpacity>
                   <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>HIDE TEXT</Text><Switch value={item.hideText} onValueChange={v => onUpdate(sectionId, item.id, 'hideText', v)} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
                   <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>FULL WIDTH</Text><Switch value={item.isFullWidth} onValueChange={v => onUpdate(sectionId, item.id, 'isFullWidth', v)} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
                 </View>
@@ -90,6 +99,7 @@ const QuestionCard = memo(({
           </View>
         </View>
       )}
+
       <View style={styles.qFooter}><Text style={styles.markLabel}>Marks</Text><TextInput style={styles.markInput} value={item.marks} onChangeText={t => onUpdate(sectionId, item.id, 'marks', t)} keyboardType="numeric" /></View>
     </View>
   );
@@ -97,12 +107,12 @@ const QuestionCard = memo(({
 
 const SectionCard = memo(({ 
   section, index, onUpdateSection, onDeleteSection, 
-  onUpdateQ, onDeleteQ, onMoveQ, onAddQ, onPasteScan
+  onUpdateQ, onDeleteQ, onMoveQ, onAddQ, onPasteScan, onPickDiagram
 }: { 
   section: Section, index: number, 
   onUpdateSection: (id: string, field: keyof Section, val: any) => void,
   onDeleteSection: (id: string) => void,
-  onUpdateQ: any, onDeleteQ: any, onMoveQ: any, onAddQ: any, onPasteScan: any
+  onUpdateQ: any, onDeleteQ: any, onMoveQ: any, onAddQ: any, onPasteScan: any, onPickDiagram: any
 }) => (
   <View style={styles.sectionContainer}>
     <View style={styles.sectionHeader}>
@@ -115,7 +125,7 @@ const SectionCard = memo(({
       </View>
     </View>
     {section.questions.map((q, idx) => (
-       <QuestionCard key={q.id} item={{...q, number: (idx+1).toString()}} sectionId={section.id} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} />
+       <QuestionCard key={q.id} item={{...q, number: (idx+1).toString()}} sectionId={section.id} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} onPickDiagram={onPickDiagram}/>
     ))}
     <View style={styles.sectionFooter}>
        <TouchableOpacity onPress={() => onPasteScan(section.id)} style={styles.secActionBtn}><Ionicons name="camera" size={16} color="#2563EB" /><Text style={styles.secActionText}>Scan</Text></TouchableOpacity>
@@ -134,17 +144,13 @@ export default function EditorScreen() {
   const initialData = Array.isArray(params.initialData) ? params.initialData[0] : params.initialData;
 
   const [currentProjectId, setCurrentProjectId] = useState<string>(projectId || Date.now().toString());
-  
-  // VIEW MODE: 'edit' or 'preview'
   const [viewMode, setViewMode] = useState<'edit' | 'preview'>('edit');
   const [previewHtml, setPreviewHtml] = useState<string>('');
-
   const [header, setHeader] = useState<any>({
     schoolName: "PaperLoop Academy", title: "Mid-Term Examination", 
     duration: "90 Mins", totalMarks: "50", 
     instructions: "1. All questions are compulsory.\n2. Draw diagrams where necessary."
   });
-
   const [sections, setSections] = useState<Section[]>([]);
   const [fontTheme, setFontTheme] = useState<'modern' | 'classic' | 'typewriter'>('modern');
   const [isAppending, setIsAppending] = useState(false);
@@ -210,7 +216,6 @@ export default function EditorScreen() {
     Alert.alert("Saved", "Draft updated successfully.");
   };
 
-  // --- PREVIEW GENERATOR ---
   const handleTogglePreview = async () => {
     if (viewMode === 'edit') {
       const html = await generateExamHtml(header, sections, fontTheme);
@@ -237,7 +242,7 @@ export default function EditorScreen() {
     } catch (e) { Alert.alert("Export Failed", "Could not generate PDF."); }
   };
 
-  // --- ACTIONS (Same as before) ---
+  // --- ACTIONS ---
   const addSection = () => setSections(prev => [...prev, { id: Date.now().toString(), title: "New Section", layout: '1-column', questions: [] }]);
   const updateSection = useCallback((id: string, field: keyof Section, value: any) => setSections(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s)), []);
   const deleteSection = useCallback((id: string) => Alert.alert("Delete Section?", "Remove all questions?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => setSections(prev => prev.filter(s => s.id !== id)) }]), []);
@@ -254,6 +259,23 @@ export default function EditorScreen() {
       return { ...s, questions: qs };
     }));
   }, []);
+  
+  // NEW: NATIVE CROP HANDLER
+  const handlePickDiagram = async (secId: string, qId: string) => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true, // Calls the OS Native Cropper
+        quality: 1,
+      });
+      if (!result.canceled && result.assets[0]) {
+        updateQ(secId, qId, 'diagramUri', result.assets[0].uri);
+      }
+    } catch (e) {
+      Alert.alert("Error", "Could not pick image.");
+    }
+  };
+
   const handleScanToSection = async (secId: string) => {
     try {
         const result = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
@@ -279,7 +301,7 @@ export default function EditorScreen() {
       <View style={styles.nav}>
         <TouchableOpacity onPress={handleHome} style={styles.navBack}><Ionicons name="home-outline" size={24} color="#111" /></TouchableOpacity>
         
-        {/* VIEW MODE TOGGLE (Edit vs Preview) */}
+        {/* VIEW MODE TOGGLE */}
         <View style={styles.toggleContainer}>
            <TouchableOpacity onPress={handleTogglePreview} style={[styles.toggleBtn, viewMode === 'edit' && styles.toggleActive]}>
               <Text style={[styles.toggleText, viewMode === 'edit' && styles.toggleTextActive]}>Edit</Text>
@@ -307,6 +329,7 @@ export default function EditorScreen() {
                         section={item} index={index} 
                         onUpdateSection={updateSection} onDeleteSection={deleteSection}
                         onUpdateQ={updateQ} onDeleteQ={deleteQ} onMoveQ={moveQ} onAddQ={addQ} onPasteScan={handleScanToSection}
+                        onPickDiagram={handlePickDiagram}
                     />
                 )}
                 ListHeaderComponent={
@@ -336,7 +359,7 @@ export default function EditorScreen() {
                originWhitelist={['*']} 
                source={{ html: previewHtml }} 
                style={{ flex: 1 }}
-               scalesPageToFit={false} // Improves text rendering
+               scalesPageToFit={false}
              />
              <TouchableOpacity onPress={handleExport} style={styles.fabPreview}>
                 <Ionicons name="share-outline" size={24} color="white" />
@@ -425,7 +448,12 @@ const styles = StyleSheet.create({
   mcqLabel: { fontWeight: '800', color: '#9CA3AF', marginRight: 6, fontSize: 12 },
   mcqInput: { flex: 1, paddingVertical: 8, fontSize: 13, color: '#374151' },
 
-  // MISSING STYLES RESTORED HERE:
+  // DIAGRAM CROP UI
+  addDiagramBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderStyle: 'dashed', borderRadius: 8, padding: 12, marginTop: 8, marginBottom: 8 },
+  addDiagramBtnHighlight: { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' },
+  addDiagramText: { fontSize: 12, fontWeight: '600', color: '#6B7280' },
+  addDiagramTextHighlight: { color: '#2563EB' },
+
   diagramControl: { backgroundColor: '#f0fdf4', padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#dcfce7' },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   ctrlLabel: { fontSize: 12, fontWeight: '700', color: '#166534', marginBottom: 8 },
