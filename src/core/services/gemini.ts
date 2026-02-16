@@ -58,7 +58,8 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
                   marks: { type: "STRING" },
                   type: { type: "STRING", enum: ["standard", "mcq"] },
                   options: { type: "ARRAY", items: { type: "STRING" } }, 
-                  has_diagram: { type: "BOOLEAN" } 
+                  has_diagram: { type: "BOOLEAN" },
+                  box_2d: { type: "ARRAY", items: { type: "NUMBER" } }
                 },
                 required: ["number", "text", "marks", "type"]
               }
@@ -82,7 +83,11 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
       1. TRANSCRIBE EXACTLY: Read carefully and transcribe what is on the page. Do NOT invent, guess, or repeat generic questions.
       2. UNREADABLE TEXT: If handwriting is completely illegible, write "[illegible]". Do not guess.
       3. MATH & CHEM: Use $...$ for inline math and $$...$$ for block math. You MUST use \\ce{...} for chemistry equations (e.g., $\\ce{H2O}$).
-      4. DIAGRAMS: If a question relies on a drawn figure or graph, set "has_diagram": true.
+      4. DIAGRAMS: If a question has a drawn figure, graph, chemical structure, or geometry drawing:
+         - Set "has_diagram": true
+         - CRITICAL: You MUST also provide "box_2d" as [ymin, xmin, ymax, xmax] with values 0-1000 
+           representing the bounding box of the diagram ON THIS PAGE IMAGE.
+         - Example: "box_2d": [400, 50, 800, 500]
       5. MCQs: Extract multiple choice options into the "options" list.
     `;
 
@@ -117,6 +122,9 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
             marks: q.marks || "",
             type: q.type || 'standard', 
             options: q.options || [],
+            has_diagram: q.has_diagram || false,
+            box_2d: q.box_2d || undefined,
+            pageUri: page.uri, // CRITICAL: Link question back to its source page for cropping
             diagramUri: q.has_diagram ? "NEEDS_CROP" : undefined, 
             hideText: false, 
             isFullWidth: false

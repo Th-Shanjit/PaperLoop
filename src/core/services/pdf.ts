@@ -158,36 +158,63 @@ const latexToHtml = (text: string): string => {
 // ============================================================
 
 const processImages = async (sections: Section[]) => {
-  return Promise.all(sections.map(async (sec) => {
-    const processedQs = await Promise.all(sec.questions.map(async (q) => {
+  let imageCount = 0;
+  let processedCount = 0;
+  let skippedCount = 0;
+
+  const result = await Promise.all(sections.map(async (sec) => {
+    const processedQs = await Promise.all(sec.questions.map(async (q, idx) => {
+      // Log the state of every question's diagram field
+      if (q.diagramUri) {
+        imageCount++;
+        console.log(`📎 Q${idx + 1} diagramUri: "${q.diagramUri.substring(0, 80)}..."`);
+      }
+
       if (q.diagramUri && q.diagramUri !== "NEEDS_CROP") {
         try {
-          if (q.diagramUri.startsWith('data:image')) return q;
-
-          console.log("📸 Processing image:", q.diagramUri);
-
-          const fileInfo = await FileSystem.getInfoAsync(q.diagramUri);
-          if (!fileInfo.exists) {
-            console.error("❌ Image file not found:", q.diagramUri);
+          // Already base64? Return as-is
+          if (q.diagramUri.startsWith('data:image')) {
+            processedCount++;
             return q;
           }
+
+          // Check if the file actually exists on disk
+          const fileInfo = await FileSystem.getInfoAsync(q.diagramUri);
+          if (!fileInfo.exists) {
+            console.error(`❌ Q${idx + 1}: Image file NOT FOUND at: ${q.diagramUri}`);
+            skippedCount++;
+            return q;
+          }
+
+          console.log(`📸 Q${idx + 1}: File exists (${fileInfo.size} bytes), encoding to base64...`);
 
           const lowerUri = q.diagramUri.toLowerCase();
           const ext = (lowerUri.endsWith('.jpg') || lowerUri.endsWith('.jpeg')) ? 'jpeg' : 'png';
 
           const b64 = await FileSystem.readAsStringAsync(q.diagramUri, { encoding: 'base64' });
-          console.log("✅ Base64 encoded, length:", b64.length);
+          console.log(`✅ Q${idx + 1}: Base64 encoded (${b64.length} chars)`);
+          processedCount++;
 
           return { ...q, imageSrc: `data:image/${ext};base64,${b64}` };
         } catch (e) {
-          console.error("❌ Image encode failed:", e);
+          console.error(`❌ Q${idx + 1}: Image encode failed:`, e);
+          skippedCount++;
           return q;
         }
       }
+
+      if (q.diagramUri === "NEEDS_CROP") {
+        console.warn(`⚠️ Q${idx + 1}: diagramUri is still "NEEDS_CROP" — was never cropped`);
+        skippedCount++;
+      }
+
       return q;
     }));
     return { ...sec, questions: processedQs };
   }));
+
+  console.log(`📊 Image processing summary: ${imageCount} total, ${processedCount} embedded, ${skippedCount} skipped`);
+  return result;
 };
 
 
@@ -243,13 +270,22 @@ export const generateExamHtml = async (
           .mcq-opt { font-size: 12pt; display: flex; align-items: flex-start; }
           .mcq-idx { font-weight: bold; margin-right: 5pt; }
 
+          /* CamScanner-like enhancement wrapper */
+          .diagram-wrapper {
+            background: white;
+            padding: 4pt;
+            margin-top: 5pt;
+            border: 1px solid #eee;
+            border-radius: 2pt;
+          }
           .diagram-img {
             display: block;
             max-width: 100%;
             max-height: 250px;
-            margin-top: 5pt;
-            border: 1px solid #eee;
             object-fit: contain;
+            /* CamScanner effect: multiply blend makes whites transparent (showing the white bg)
+               and keeps darks dark — enhancing contrast. Safe fallback: shows normally if unsupported. */
+            mix-blend-mode: multiply;
           }
 
           sup { font-size: 0.75em; vertical-align: super; }
@@ -287,7 +323,7 @@ export const generateExamHtml = async (
                         </div>
                       ` : ''}
 
-                      ${(q as any).imageSrc ? `<img src="${(q as any).imageSrc}" class="diagram-img" />` : ''}
+                      ${(q as any).imageSrc ? `<div class="diagram-wrapper"><img src="${(q as any).imageSrc}" class="diagram-img" /></div>` : ''}
                     </div>
                     <div class="q-marks">[ ${q.marks} ]</div>
                   </div>

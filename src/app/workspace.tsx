@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
 import { 
   getSessionPages, 
   removePageFromSession, 
@@ -91,41 +92,39 @@ export default function WorkspaceScreen() {
       const result = await transcribeHandwriting(pages);
       
       // Process diagrams for cropping (works for both sections and questions)
-      const processDiagramCrop = async (q: any) => {
+      const processDiagramCrop = async (q: any, qIndex: number) => {
         let finalQ = { ...q };
         if (q.has_diagram && q.box_2d && q.pageUri) {
           try {
+            console.log(`🔍 Cropping diagram for Q${qIndex + 1}, box_2d:`, q.box_2d, "from:", q.pageUri);
+
             const { width: imgW, height: imgH } = await new Promise((resolve) => {
                  Image.getSize(q.pageUri, (w, h) => resolve({width: w, height: h}), () => resolve({width: 1000, height: 1000}));
             }) as any;
 
+            console.log(`📐 Image dimensions: ${imgW}x${imgH}`);
+
             const [ymin, xmin, ymax, xmax] = q.box_2d;
             
-            // --- FIX: HYBRID PADDING STRATEGY ---
-            // Use 5% OR 50 pixels, whichever is larger.
-            // This ensures small diagrams get at least 50px buffer.
+            // --- HYBRID PADDING STRATEGY ---
             const paddingX = Math.max(imgW * 0.05, 50);
             const paddingY = Math.max(imgH * 0.05, 50);
 
-            // Calculate expanded box (clamped to image size)
             const finalX = Math.max(0, (xmin / 1000) * imgW - paddingX);
             const finalY = Math.max(0, (ymin / 1000) * imgH - paddingY);
-            
-            // Width is: (Original Width) + (Left Padding) + (Right Padding)
             const boxW = ((xmax - xmin) / 1000) * imgW;
             const finalW = Math.min(imgW - finalX, boxW + (paddingX * 2));
-            
-            // Height is: (Original Height) + (Top Padding) + (Bottom Padding)
             const boxH = ((ymax - ymin) / 1000) * imgH;
             const finalH = Math.min(imgH - finalY, boxH + (paddingY * 2));
 
-            const cropConfig = {
-              originX: finalX,
-              originY: finalY,
-              width: finalW,
-              height: finalH
-            };
-            // ------------------------------------
+            // Validate crop dimensions
+            if (finalW <= 0 || finalH <= 0) {
+              console.error(`❌ Invalid crop dimensions: ${finalW}x${finalH}`);
+              return finalQ;
+            }
+
+            const cropConfig = { originX: finalX, originY: finalY, width: finalW, height: finalH };
+            console.log(`✂️ Crop config:`, cropConfig);
 
             const cropResult = await ImageManipulator.manipulateAsync(
               q.pageUri,
@@ -133,8 +132,19 @@ export default function WorkspaceScreen() {
               { compress: 1, format: ImageManipulator.SaveFormat.PNG }
             );
 
-            finalQ.diagramUri = cropResult.uri;
-          } catch (e) { console.error("Crop Failed", e); }
+            // Save to permanent location so it survives until PDF export
+            const diagDir = FileSystem.documentDirectory + 'diagrams/';
+            const dirInfo = await FileSystem.getInfoAsync(diagDir);
+            if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(diagDir, { intermediates: true });
+            
+            const permanentUri = diagDir + `diagram_${Date.now()}_${qIndex}.png`;
+            await FileSystem.copyAsync({ from: cropResult.uri, to: permanentUri });
+            
+            finalQ.diagramUri = permanentUri;
+            console.log(`✅ Diagram saved: ${permanentUri}`);
+          } catch (e) { console.error("❌ Crop Failed for Q" + (qIndex + 1), e); }
+        } else if (q.has_diagram && !q.box_2d) {
+          console.warn(`⚠️ Q${qIndex + 1} has_diagram=true but NO box_2d returned by Gemini`);
         }
         return finalQ;
       };
@@ -143,11 +153,13 @@ export default function WorkspaceScreen() {
       if (result.sections && result.sections.length > 0) {
         // NEW FORMAT: Process sections
         const processedSections = [];
+        let globalQIndex = 0;
         for (const section of result.sections) {
           const processedQuestions = [];
           for (const q of section.questions) {
-            const processed = await processDiagramCrop(q);
+            const processed = await processDiagramCrop(q, globalQIndex);
             processedQuestions.push(processed);
+            globalQIndex++;
           }
           processedSections.push({
             ...section,
@@ -155,23 +167,24 @@ export default function WorkspaceScreen() {
           });
         }
 
-        // PASS SECTIONS: The AI gave us structured data (Layer 4)
+        console.log(`📋 Processed ${globalQIndex} questions across ${processedSections.length} sections`);
+
+        // PASS SECTIONS to Editor
         router.push({
           pathname: "/editor",
           params: { 
-            initialData: JSON.stringify(processedSections), // Pass the SECTIONS array
-            isSectionData: "true" // Flag to tell Editor this is new data
+            initialData: JSON.stringify(processedSections),
+            isSectionData: "true"
           }
         });
       } else if (result.questions) {
         // OLD FORMAT: Process flat questions list
         const processedQuestions = [];
-        for (const q of result.questions) {
-          const processed = await processDiagramCrop(q);
+        for (let i = 0; i < result.questions.length; i++) {
+          const processed = await processDiagramCrop(result.questions[i], i);
           processedQuestions.push(processed);
         }
 
-        // FALLBACK: Old behavior
         router.push({
           pathname: "/editor",
           params: { initialData: JSON.stringify(processedQuestions) }
