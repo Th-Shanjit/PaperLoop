@@ -255,7 +255,8 @@ export const generateExamHtml = async (
           .instructions { background: #f8f9fa; padding: 8pt; font-size: 10pt; margin-bottom: 10pt; border-left: 3pt solid #111; line-height: 1.4; }
 
           .section-container { margin-bottom: 10pt; }
-          .section-title { font-size: 12pt; font-weight: 800; text-transform: uppercase; margin-bottom: 6pt; padding-bottom: 3pt; border-bottom: 1pt solid #ddd; }
+          .section-title { font-size: 12pt; font-weight: 800; text-transform: uppercase; margin-bottom: 6pt; padding-bottom: 3pt; }
+          .section-title-divider { border-bottom: 1pt solid #ddd; }
 
           .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 8pt; }
           .span-all { column-span: all; display: block; margin-bottom: 8pt; }
@@ -309,16 +310,17 @@ export const generateExamHtml = async (
           if (visibleQs.length === 0) return '';
           return `
           <div class="section-container">
-            <div class="section-title">${latexToHtml(sec.title)}</div>
+            <div class="section-title ${sec.showDivider ? 'section-title-divider' : ''}">${latexToHtml(sec.title)}</div>
             <div style="column-count: ${getColumnCount(sec.layout)}; column-gap: 20pt;">
               ${visibleQs.map((q, idx) => {
                 const sizeKey = (q as any).diagramSize || 'M';
                 const imgHeight = DIAGRAM_HEIGHTS[sizeKey] || '180px';
                 const marksStr = q.marks && q.marks.trim() !== '' && q.marks !== '0' ? `[ ${q.marks} ]` : '';
+                const qNum = q.number && q.number.trim() !== '' ? q.number : (idx + 1).toString();
                 return `
                 <div class="q-item ${q.isFullWidth ? 'span-all' : ''}">
                   <div class="q-row">
-                    <div class="q-num">${q.number && q.number.trim() !== '' ? q.number + '.' : (idx + 1) + '.'}</div>
+                    <div class="q-num">${qNum}.</div>
                     <div class="q-content">
                       ${!q.hideText && q.text && q.text.trim() !== '' ? `<p class="q-text">${latexToHtml(q.text)}</p>` : ''}
 

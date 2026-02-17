@@ -162,6 +162,9 @@ const SectionCard = memo(({
     <View style={styles.sectionHeader}>
       <TextInput style={styles.sectionTitleInput} value={section.title} onChangeText={t => onUpdateSection(section.id, 'title', t)} placeholder="Section Title" />
       <View style={styles.sectionTools}>
+         <TouchableOpacity onPress={() => onUpdateSection(section.id, 'showDivider', !section.showDivider)} style={[styles.dividerBadge, section.showDivider && styles.dividerBadgeActive]}>
+            <Ionicons name="remove" size={14} color={section.showDivider ? "white" : "#555"} />
+         </TouchableOpacity>
          <TouchableOpacity onPress={() => onUpdateSection(section.id, 'layout', LAYOUT_CYCLE[section.layout] || '1-column')} style={[styles.layoutBadge, section.layout !== '1-column' && styles.layoutBadgeActive]}>
             <Text style={[styles.layoutText, section.layout !== '1-column' && {color:'white'}]}>{LAYOUT_LABEL[section.layout] || '1 Col'}</Text>
          </TouchableOpacity>
@@ -485,6 +488,8 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingHorizontal: 4 },
   sectionTitleInput: { fontSize: 16, fontWeight: '800', color: '#1f2937', flex: 1, borderBottomWidth: 1, borderColor: '#ddd', paddingBottom: 4 },
   sectionTools: { flexDirection: 'row', gap: 8, marginLeft: 10 },
+  dividerBadge: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
+  dividerBadgeActive: { backgroundColor: '#111' },
   layoutBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: '#e5e7eb' },
   layoutBadgeActive: { backgroundColor: '#111' },
   layoutText: { fontSize: 10, fontWeight: '700', color: '#555' },

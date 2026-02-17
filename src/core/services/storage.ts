@@ -30,6 +30,7 @@ export interface Section {
   id: string;
   title: string;
   layout: '1-column' | '2-column' | '3-column';
+  showDivider?: boolean;
   questions: Question[];
 }
 
