@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as ImageManipulator from 'expo-image-manipulator';
 
-const MODEL_ID = 'gemini-3-flash-preview'; 
+const MODEL_ID = 'gemini-2.5-flash'; 
 
 interface ScannedPage {
   uri: string;

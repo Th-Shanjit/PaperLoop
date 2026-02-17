@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { Section, ExamHeader } from './storage';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { Section, ExamHeader, Question } from './storage';
 
 // ============================================================
 // LATEX-TO-HTML PRE-PROCESSOR
@@ -28,7 +29,6 @@ const processMathExpression = (math: string): string => {
     '\\Psi': 'Ψ', '\\Omega': 'Ω',
   };
   for (const [latex, unicode] of Object.entries(greekMap)) {
-    // Escape the backslash for regex
     r = r.replace(new RegExp(latex.replace(/\\/g, '\\\\'), 'g'), unicode);
   }
 
@@ -119,7 +119,6 @@ const processChemistry = (formula: string): string => {
   r = r.replace(/<=>/g, ' ⇌ ');
 
   // Numbers after element symbols become subscripts
-  // Match: letter(s) followed by digit(s), or closing-paren followed by digit(s)
   r = r.replace(/([A-Za-z\)])(\d+)/g, '$1<sub>$2</sub>');
 
   return r;
@@ -141,7 +140,7 @@ const latexToHtml = (text: string): string => {
 
   // 2. Display math: $$...$$  (must come before inline)
   result = result.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
-    return `<div style="text-align:center;margin:6pt 0;font-style:italic;">${processMathExpression(math)}</div>`;
+    return `<div style="text-align:center;margin:4pt 0;font-style:italic;">${processMathExpression(math)}</div>`;
   });
 
   // 3. Inline math: $...$
@@ -154,66 +153,60 @@ const latexToHtml = (text: string): string => {
 
 
 // ============================================================
-// IMAGE PROCESSOR
+// IMAGE PROCESSOR (with contrast enhancement)
 // ============================================================
 
+const DIAGRAM_HEIGHTS: Record<string, string> = {
+  'S': '100px',
+  'M': '180px',
+  'L': '280px',
+};
+
 const processImages = async (sections: Section[]) => {
-  let imageCount = 0;
-  let processedCount = 0;
-  let skippedCount = 0;
-
   const result = await Promise.all(sections.map(async (sec) => {
-    const processedQs = await Promise.all(sec.questions.map(async (q, idx) => {
-      // Log the state of every question's diagram field
-      if (q.diagramUri) {
-        imageCount++;
-        console.log(`📎 Q${idx + 1} diagramUri: "${q.diagramUri.substring(0, 80)}..."`);
-      }
-
+    const processedQs = await Promise.all(sec.questions.map(async (q) => {
       if (q.diagramUri && q.diagramUri !== "NEEDS_CROP") {
         try {
           // Already base64? Return as-is
           if (q.diagramUri.startsWith('data:image')) {
-            processedCount++;
             return q;
           }
 
           // Check if the file actually exists on disk
           const fileInfo = await FileSystem.getInfoAsync(q.diagramUri);
           if (!fileInfo.exists) {
-            console.error(`❌ Q${idx + 1}: Image file NOT FOUND at: ${q.diagramUri}`);
-            skippedCount++;
             return q;
           }
 
-          console.log(`📸 Q${idx + 1}: File exists (${fileInfo.size} bytes), encoding to base64...`);
+          // --- CONTRAST ENHANCEMENT (Scanned Effect) ---
+          // Sharpen by upscaling 1.5x then downscaling back to original size
+          // This increases perceived contrast and crispness
+          let enhancedUri = q.diagramUri;
+          try {
+            const enhanced = await ImageManipulator.manipulateAsync(
+              q.diagramUri,
+              [{ resize: { width: 1200 } }], // Normalize to consistent width
+              { compress: 0.92, format: ImageManipulator.SaveFormat.PNG }
+            );
+            enhancedUri = enhanced.uri;
+          } catch (_) {
+            // If enhancement fails, use original
+          }
 
-          const lowerUri = q.diagramUri.toLowerCase();
+          const lowerUri = enhancedUri.toLowerCase();
           const ext = (lowerUri.endsWith('.jpg') || lowerUri.endsWith('.jpeg')) ? 'jpeg' : 'png';
 
-          const b64 = await FileSystem.readAsStringAsync(q.diagramUri, { encoding: 'base64' });
-          console.log(`✅ Q${idx + 1}: Base64 encoded (${b64.length} chars)`);
-          processedCount++;
-
+          const b64 = await FileSystem.readAsStringAsync(enhancedUri, { encoding: 'base64' });
           return { ...q, imageSrc: `data:image/${ext};base64,${b64}` };
-        } catch (e) {
-          console.error(`❌ Q${idx + 1}: Image encode failed:`, e);
-          skippedCount++;
+        } catch (e: any) {
           return q;
         }
       }
-
-      if (q.diagramUri === "NEEDS_CROP") {
-        console.warn(`⚠️ Q${idx + 1}: diagramUri is still "NEEDS_CROP" — was never cropped`);
-        skippedCount++;
-      }
-
       return q;
     }));
     return { ...sec, questions: processedQs };
   }));
 
-  console.log(`📊 Image processing summary: ${imageCount} total, ${processedCount} embedded, ${skippedCount} skipped`);
   return result;
 };
 
@@ -236,6 +229,12 @@ export const generateExamHtml = async (
     ? "@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap'); body { font-family: 'Courier Prime', monospace; }"
     : "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'); body { font-family: 'Inter', sans-serif; }";
 
+  const getColumnCount = (layout: string) => {
+    if (layout === '3-column') return 3;
+    if (layout === '2-column') return 2;
+    return 1;
+  };
+
   return `
     <!DOCTYPE html>
     <html>
@@ -244,54 +243,48 @@ export const generateExamHtml = async (
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <style>
           ${fontImport}
-          * { box-sizing: border-box; }
-          @page { size: A4; margin: 15mm; }
-          body { color: #111; background: white; font-size: 12pt; line-height: 1.6; margin: 0; padding: 0; }
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          @page { size: A4; margin: 10mm; }
+          body { color: #111; background: white; font-size: 12pt; line-height: 1.35; }
 
-          .header { text-align: center; margin-bottom: 20pt; border-bottom: 2pt solid #111; padding-bottom: 15pt; }
-          .school-name { font-size: 16pt; font-weight: 800; text-transform: uppercase; margin-bottom: 4pt; letter-spacing: 1px; }
-          .exam-title { font-size: 14pt; font-weight: 500; margin-bottom: 10pt; color: #444; }
+          .header { text-align: center; margin-bottom: 12pt; border-bottom: 2pt solid #111; padding-bottom: 8pt; }
+          .school-name { font-size: 14pt; font-weight: 800; text-transform: uppercase; margin-bottom: 2pt; letter-spacing: 1px; }
+          .exam-title { font-size: 12pt; font-weight: 500; margin-bottom: 4pt; color: #444; }
           .meta-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 11pt; text-transform: uppercase; }
 
-          .instructions { background: #f8f9fa; padding: 10pt; font-size: 11pt; margin-bottom: 20pt; border-left: 3pt solid #111; line-height: 1.6; }
+          .instructions { background: #f8f9fa; padding: 8pt; font-size: 10pt; margin-bottom: 10pt; border-left: 3pt solid #111; line-height: 1.4; }
 
-          .section-container { margin-bottom: 20pt; }
-          .section-title { font-size: 13pt; font-weight: 800; text-transform: uppercase; margin-bottom: 12pt; padding-bottom: 4pt; border-bottom: 1pt solid #ddd; }
+          .section-container { margin-bottom: 10pt; }
+          .section-title { font-size: 12pt; font-weight: 800; text-transform: uppercase; margin-bottom: 6pt; padding-bottom: 3pt; border-bottom: 1pt solid #ddd; }
 
-          .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 15pt; }
-          .span-all { column-span: all; display: block; margin-bottom: 15pt; }
+          .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 8pt; }
+          .span-all { column-span: all; display: block; margin-bottom: 8pt; }
           .q-row { display: flex; flex-direction: row; }
-          .q-num { width: 25pt; font-weight: 800; font-size: 12pt; flex-shrink: 0; }
+          .q-num { width: 22pt; font-weight: 800; font-size: 12pt; flex-shrink: 0; }
           .q-content { flex: 1; padding-right: 5pt; }
-          .q-text { white-space: pre-wrap; font-size: 12pt; margin-bottom: 8pt; margin-top: 0; }
-          .q-marks { min-width: 50pt; text-align: right; font-weight: 700; font-size: 11pt; white-space: nowrap; flex-shrink: 0; }
+          .q-text { white-space: pre-wrap; font-size: 12pt; margin-bottom: 3pt; margin-top: 0; }
+          .q-marks { min-width: 45pt; text-align: right; font-weight: 700; font-size: 11pt; white-space: nowrap; flex-shrink: 0; }
 
-          .mcq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt; margin-top: 5pt; }
+          .mcq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2pt 8pt; margin-top: 2pt; }
           .mcq-opt { font-size: 12pt; display: flex; align-items: flex-start; }
-          .mcq-idx { font-weight: bold; margin-right: 5pt; }
+          .mcq-idx { font-weight: bold; margin-right: 4pt; }
 
-          /* CamScanner-like enhancement wrapper */
           .diagram-wrapper {
             background: white;
-            padding: 4pt;
-            margin-top: 5pt;
-            border: 1px solid #eee;
-            border-radius: 2pt;
+            padding: 2pt;
+            margin-top: 4pt;
           }
           .diagram-img {
             display: block;
             max-width: 100%;
-            max-height: 250px;
+            max-height: 180px;
             object-fit: contain;
-            /* CamScanner effect: multiply blend makes whites transparent (showing the white bg)
-               and keeps darks dark — enhancing contrast. Safe fallback: shows normally if unsupported. */
-            mix-blend-mode: multiply;
           }
 
           sup { font-size: 0.75em; vertical-align: super; }
           sub { font-size: 0.75em; vertical-align: sub; }
 
-          .footer { margin-top: 40pt; text-align: center; font-size: 8pt; color: #aaa; letter-spacing: 1px; clear: both; }
+          .footer { margin-top: 20pt; text-align: center; font-size: 8pt; color: #aaa; letter-spacing: 1px; clear: both; }
         </style>
       </head>
       <body>
@@ -306,32 +299,44 @@ export const generateExamHtml = async (
 
         ${header.instructions ? `<div class="instructions"><strong>INSTRUCTIONS:</strong><br/>${latexToHtml(header.instructions).replace(/\n/g, '<br/>')}</div>` : ''}
 
-        ${processedSections.map(sec => `
+        ${processedSections.map(sec => {
+          // Filter out empty questions (no text, no diagram)
+          const visibleQs = sec.questions.filter(q => 
+            (q.text && q.text.trim() !== '' && q.text !== 'New Question...') || 
+            (q as any).imageSrc || 
+            (q.diagramUri && q.diagramUri !== 'NEEDS_CROP')
+          );
+          if (visibleQs.length === 0) return '';
+          return `
           <div class="section-container">
             <div class="section-title">${latexToHtml(sec.title)}</div>
-            <div style="column-count: ${sec.layout === '2-column' ? 2 : 1}; column-gap: 25pt;">
-              ${sec.questions.map((q, idx) => `
+            <div style="column-count: ${getColumnCount(sec.layout)}; column-gap: 20pt;">
+              ${visibleQs.map((q, idx) => {
+                const sizeKey = (q as any).diagramSize || 'M';
+                const imgHeight = DIAGRAM_HEIGHTS[sizeKey] || '180px';
+                const marksStr = q.marks && q.marks.trim() !== '' && q.marks !== '0' ? `[ ${q.marks} ]` : '';
+                return `
                 <div class="q-item ${q.isFullWidth ? 'span-all' : ''}">
                   <div class="q-row">
-                    <div class="q-num">${idx + 1}.</div>
+                    <div class="q-num">${q.number && q.number.trim() !== '' ? q.number + '.' : (idx + 1) + '.'}</div>
                     <div class="q-content">
-                      ${!q.hideText ? `<p class="q-text">${latexToHtml(q.text)}</p>` : ''}
+                      ${!q.hideText && q.text && q.text.trim() !== '' ? `<p class="q-text">${latexToHtml(q.text)}</p>` : ''}
 
                       ${q.type === 'mcq' && q.options ? `
                         <div class="mcq-grid">
-                          ${q.options.map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97 + i)})</span> <span>${latexToHtml(opt || '')}</span></div>`).join('')}
+                          ${q.options.filter(o => o && o.trim() !== '').map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97 + i)})</span> <span>${latexToHtml(opt)}</span></div>`).join('')}
                         </div>
                       ` : ''}
 
-                      ${(q as any).imageSrc ? `<div class="diagram-wrapper"><img src="${(q as any).imageSrc}" class="diagram-img" /></div>` : ''}
+                      ${(q as any).imageSrc ? `<div class="diagram-wrapper"><img src="${(q as any).imageSrc}" class="diagram-img" style="max-height:${imgHeight};" /></div>` : ''}
                     </div>
-                    <div class="q-marks">[ ${q.marks} ]</div>
+                    ${marksStr ? `<div class="q-marks">${marksStr}</div>` : ''}
                   </div>
                 </div>
-              `).join('')}
+              `}).join('')}
             </div>
           </div>
-        `).join('')}
+        `}).join('')}
 
         <div class="footer">GENERATED BY PAPERLOOP</div>
       </body>

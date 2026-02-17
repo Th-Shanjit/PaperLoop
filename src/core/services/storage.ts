@@ -19,6 +19,7 @@ export interface Question {
   text: string;
   marks: string;
   diagramUri?: string;
+  diagramSize?: 'S' | 'M' | 'L';
   hideText?: boolean;
   isFullWidth?: boolean;
   type?: 'standard' | 'mcq'; 
@@ -28,7 +29,7 @@ export interface Question {
 export interface Section {
   id: string;
   title: string;
-  layout: '1-column' | '2-column';
+  layout: '1-column' | '2-column' | '3-column';
   questions: Question[];
 }
 

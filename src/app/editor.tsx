@@ -15,6 +15,18 @@ import { transcribeHandwriting } from '../core/services/gemini';
 import { saveProject, getProject, ExamProject, Section, Question } from '../core/services/storage'; 
 import { generateExamHtml } from '../core/services/pdf';
 
+// --- HELPERS ---
+const LAYOUT_CYCLE: Record<string, '1-column' | '2-column' | '3-column'> = {
+  '1-column': '2-column',
+  '2-column': '3-column',
+  '3-column': '1-column',
+};
+const LAYOUT_LABEL: Record<string, string> = {
+  '1-column': '1 Col',
+  '2-column': '2 Col',
+  '3-column': '3 Col',
+};
+
 // --- SUB-COMPONENTS ---
 const HeaderEditor = memo(({ header, onChange }: { header: any, onChange: (h: any) => void }) => (
   <View style={styles.headerCard}>
@@ -29,29 +41,38 @@ const HeaderEditor = memo(({ header, onChange }: { header: any, onChange: (h: an
 ));
 
 const QuestionCard = memo(({ 
-  item, sectionId, onUpdate, onDelete, onMove, onPickDiagram 
+  item, sectionId, allSections, onUpdate, onDelete, onMove, onPickDiagram, onMoveToSection 
 }: { 
   item: Question, sectionId: string, 
+  allSections: { id: string; title: string }[],
   onUpdate: (sId: string, qId: string, field: keyof Question, val: any) => void,
   onDelete: (sId: string, qId: string) => void,
   onMove: (sId: string, idx: number, dir: 'up' | 'down') => void,
-  onPickDiagram: (sId: string, qId: string) => void
+  onPickDiagram: (sId: string, qId: string) => void,
+  onMoveToSection: (fromSecId: string, qId: string, toSecId: string) => void
 }) => {
+  const [showMoveMenu, setShowMoveMenu] = useState(false);
   const updateOption = (idx: number, text: string) => {
     const newOptions = [...(item.options || ["", "", "", ""])];
     newOptions[idx] = text;
     onUpdate(sectionId, item.id, 'options', newOptions);
   };
+  const otherSections = allSections.filter(s => s.id !== sectionId);
+  const currentSize = item.diagramSize || 'M';
+
   return (
     <View style={styles.qCard}>
       <View style={styles.qHeader}>
-        <View style={styles.numTag}><TextInput style={styles.numInput} value={item.number} onChangeText={t => onUpdate(sectionId, item.id, 'number', t)} /></View>
+        <View style={styles.numTag}><TextInput style={styles.numInput} value={item.number} onChangeText={t => onUpdate(sectionId, item.id, 'number', t)} placeholder="#" placeholderTextColor="#888" /></View>
         <TouchableOpacity onPress={() => onUpdate(sectionId, item.id, 'type', item.type === 'mcq' ? 'standard' : 'mcq')} style={[styles.typeBadge, item.type === 'mcq' ? styles.typeBadgeMCQ : {}]}>
           <Text style={[styles.typeText, item.type === 'mcq' && {color:'white'}]}>{item.type === 'mcq' ? 'MCQ' : 'TEXT'}</Text>
         </TouchableOpacity>
         <View style={styles.toolRow}>
           <TouchableOpacity onPress={() => onMove(sectionId, parseInt(item.number)-1, 'up')} style={styles.toolBtn}><Ionicons name="arrow-up" size={16} color="#555" /></TouchableOpacity>
           <TouchableOpacity onPress={() => onMove(sectionId, parseInt(item.number)-1, 'down')} style={styles.toolBtn}><Ionicons name="arrow-down" size={16} color="#555" /></TouchableOpacity>
+          {otherSections.length > 0 && (
+            <TouchableOpacity onPress={() => setShowMoveMenu(true)} style={[styles.toolBtn, {backgroundColor:'#EFF6FF'}]}><Ionicons name="swap-horizontal" size={16} color="#2563EB" /></TouchableOpacity>
+          )}
           <TouchableOpacity onPress={() => onDelete(sectionId, item.id)} style={[styles.toolBtn, {backgroundColor:'#fee2e2'}]}><Ionicons name="trash" size={16} color="#dc2626" /></TouchableOpacity>
         </View>
       </View>
@@ -71,7 +92,7 @@ const QuestionCard = memo(({
         </View>
       )}
 
-      {/* NEW NATIVE CROPPER UI */}
+      {/* DIAGRAM AREA */}
       {!item.diagramUri || item.diagramUri === "NEEDS_CROP" ? (
         <TouchableOpacity 
           onPress={() => onPickDiagram(sectionId, item.id)} 
@@ -88,44 +109,67 @@ const QuestionCard = memo(({
            <View style={styles.diagramControl}>
              <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
                 <Text style={styles.ctrlSub}>Settings</Text>
-                <View style={{flexDirection:'row', gap:12, alignItems: 'center'}}>
-                  <TouchableOpacity onPress={() => onPickDiagram(sectionId, item.id)} style={{marginRight: 10}}>
+                <View style={{flexDirection:'row', gap:8, alignItems: 'center'}}>
+                  <TouchableOpacity onPress={() => onPickDiagram(sectionId, item.id)} style={{marginRight: 4}}>
                     <Ionicons name="crop" size={18} color="#2563EB" />
                   </TouchableOpacity>
-                  <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>HIDE TEXT</Text><Switch value={item.hideText} onValueChange={v => onUpdate(sectionId, item.id, 'hideText', v)} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
-                  <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>FULL WIDTH</Text><Switch value={item.isFullWidth} onValueChange={v => onUpdate(sectionId, item.id, 'isFullWidth', v)} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
+                  {/* SIZE PRESETS */}
+                  {(['S','M','L'] as const).map(sz => (
+                    <TouchableOpacity key={sz} onPress={() => onUpdate(sectionId, item.id, 'diagramSize', sz)} style={[styles.sizeBadge, currentSize === sz && styles.sizeBadgeActive]}>
+                      <Text style={[styles.sizeText, currentSize === sz && styles.sizeTextActive]}>{sz}</Text>
+                    </TouchableOpacity>
+                  ))}
+                  <View style={{width:1, height:16, backgroundColor:'#ddd', marginHorizontal:2}} />
+                  <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>HIDE</Text><Switch value={item.hideText} onValueChange={v => onUpdate(sectionId, item.id, 'hideText', v)} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
+                  <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>FULL</Text><Switch value={item.isFullWidth} onValueChange={v => onUpdate(sectionId, item.id, 'isFullWidth', v)} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
                 </View>
              </View>
           </View>
         </View>
       )}
 
-      <View style={styles.qFooter}><Text style={styles.markLabel}>Marks</Text><TextInput style={styles.markInput} value={item.marks} onChangeText={t => onUpdate(sectionId, item.id, 'marks', t)} keyboardType="numeric" /></View>
+      <View style={styles.qFooter}><Text style={styles.markLabel}>Marks</Text><TextInput style={styles.markInput} value={item.marks} onChangeText={t => onUpdate(sectionId, item.id, 'marks', t)} keyboardType="numeric" placeholder="-" placeholderTextColor="#bbb" /></View>
+
+      {/* MOVE-TO-SECTION MODAL */}
+      <Modal visible={showMoveMenu} transparent animationType="fade">
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setShowMoveMenu(false)} activeOpacity={1}>
+          <View style={styles.menu}>
+            <Text style={styles.menuTitle}>Move to Section</Text>
+            {otherSections.map(s => (
+              <TouchableOpacity key={s.id} style={styles.menuItem} onPress={() => { onMoveToSection(sectionId, item.id, s.id); setShowMoveMenu(false); }}>
+                <Text style={styles.menuText}>{s.title}</Text>
+                <Ionicons name="arrow-forward" size={14} color="#2563EB" />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 });
 
 const SectionCard = memo(({ 
-  section, index, onUpdateSection, onDeleteSection, 
-  onUpdateQ, onDeleteQ, onMoveQ, onAddQ, onPasteScan, onPickDiagram
+  section, index, allSections, onUpdateSection, onDeleteSection, 
+  onUpdateQ, onDeleteQ, onMoveQ, onAddQ, onPasteScan, onPickDiagram, onMoveToSection
 }: { 
   section: Section, index: number, 
+  allSections: { id: string; title: string }[],
   onUpdateSection: (id: string, field: keyof Section, val: any) => void,
   onDeleteSection: (id: string) => void,
-  onUpdateQ: any, onDeleteQ: any, onMoveQ: any, onAddQ: any, onPasteScan: any, onPickDiagram: any
+  onUpdateQ: any, onDeleteQ: any, onMoveQ: any, onAddQ: any, onPasteScan: any, onPickDiagram: any, onMoveToSection: any
 }) => (
   <View style={styles.sectionContainer}>
     <View style={styles.sectionHeader}>
       <TextInput style={styles.sectionTitleInput} value={section.title} onChangeText={t => onUpdateSection(section.id, 'title', t)} placeholder="Section Title" />
       <View style={styles.sectionTools}>
-         <TouchableOpacity onPress={() => onUpdateSection(section.id, 'layout', section.layout === '1-column' ? '2-column' : '1-column')} style={[styles.layoutBadge, section.layout === '2-column' && styles.layoutBadgeActive]}>
-            <Text style={[styles.layoutText, section.layout === '2-column' && {color:'white'}]}>{section.layout === '1-column' ? '1 Col' : '2 Col'}</Text>
+         <TouchableOpacity onPress={() => onUpdateSection(section.id, 'layout', LAYOUT_CYCLE[section.layout] || '1-column')} style={[styles.layoutBadge, section.layout !== '1-column' && styles.layoutBadgeActive]}>
+            <Text style={[styles.layoutText, section.layout !== '1-column' && {color:'white'}]}>{LAYOUT_LABEL[section.layout] || '1 Col'}</Text>
          </TouchableOpacity>
          <TouchableOpacity onPress={() => onDeleteSection(section.id)} style={styles.delSectionBtn}><Ionicons name="close" size={16} color="#ef4444" /></TouchableOpacity>
       </View>
     </View>
     {section.questions.map((q, idx) => (
-       <QuestionCard key={q.id} item={{...q, number: (idx+1).toString()}} sectionId={section.id} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} onPickDiagram={onPickDiagram}/>
+       <QuestionCard key={q.id} item={{...q, number: (idx+1).toString()}} sectionId={section.id} allSections={allSections} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} onPickDiagram={onPickDiagram} onMoveToSection={onMoveToSection}/>
     ))}
     <View style={styles.sectionFooter}>
        <TouchableOpacity onPress={() => onPasteScan(section.id)} style={styles.secActionBtn}><Ionicons name="camera" size={16} color="#2563EB" /><Text style={styles.secActionText}>Scan</Text></TouchableOpacity>
@@ -156,6 +200,9 @@ export default function EditorScreen() {
   const [isAppending, setIsAppending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+
+  // Derived: lightweight section list for move-to-section picker
+  const sectionList = sections.map(s => ({ id: s.id, title: s.title }));
 
   useEffect(() => {
     const init = async () => {
@@ -188,7 +235,7 @@ export default function EditorScreen() {
           } else {
             const formatted = parsed.map((q: any, index: number) => ({
               id: Date.now().toString() + index, number: "", text: q.text || q.question_text || "", 
-              marks: (q.marks || "5").toString(), diagramUri: q.diagramUri, 
+              marks: (q.marks || "").toString(), diagramUri: q.diagramUri, 
               hideText: q.has_diagram ? true : false, isFullWidth: false, type: 'standard', options: []
             }));
             const newSection: Section = { id: Date.now().toString(), title: 'Section A', layout: '1-column', questions: formatted };
@@ -248,7 +295,7 @@ export default function EditorScreen() {
   const deleteSection = useCallback((id: string) => Alert.alert("Delete Section?", "Remove all questions?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => setSections(prev => prev.filter(s => s.id !== id)) }]), []);
   const updateQ = useCallback((secId: string, qId: string, field: any, value: any) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: s.questions.map(q => q.id === qId ? { ...q, [field]: value } : q) } : s)), []);
   const deleteQ = useCallback((secId: string, qId: string) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: s.questions.filter(q => q.id !== qId) } : s)), []);
-  const addQ = (secId: string) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, { id: Date.now().toString(), number: "", text: "New Question...", marks: "1", type: 'standard', options:["","","",""] }] } : s));
+  const addQ = (secId: string) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, { id: Date.now().toString(), number: "", text: "", marks: "", type: 'standard', options:["","","",""] }] } : s));
   const moveQ = useCallback((secId: string, idx: number, dir: 'up' | 'down') => {
     setSections(prev => prev.map(s => {
       if (s.id !== secId) return s;
@@ -259,13 +306,28 @@ export default function EditorScreen() {
       return { ...s, questions: qs };
     }));
   }, []);
+
+  // MOVE QUESTION BETWEEN SECTIONS
+  const moveToSection = useCallback((fromSecId: string, qId: string, toSecId: string) => {
+    setSections(prev => {
+      const fromSec = prev.find(s => s.id === fromSecId);
+      if (!fromSec) return prev;
+      const question = fromSec.questions.find(q => q.id === qId);
+      if (!question) return prev;
+      return prev.map(s => {
+        if (s.id === fromSecId) return { ...s, questions: s.questions.filter(q => q.id !== qId) };
+        if (s.id === toSecId) return { ...s, questions: [...s.questions, question] };
+        return s;
+      });
+    });
+  }, []);
   
-  // NEW: NATIVE CROP HANDLER
+  // NATIVE CROP HANDLER
   const handlePickDiagram = async (secId: string, qId: string) => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true, // Calls the OS Native Cropper
+        allowsEditing: true,
         quality: 1,
       });
       if (!result.canceled && result.assets[0]) {
@@ -327,9 +389,11 @@ export default function EditorScreen() {
                 renderItem={({ item, index }) => (
                     <SectionCard 
                         section={item} index={index} 
+                        allSections={sectionList}
                         onUpdateSection={updateSection} onDeleteSection={deleteSection}
                         onUpdateQ={updateQ} onDeleteQ={deleteQ} onMoveQ={moveQ} onAddQ={addQ} onPasteScan={handleScanToSection}
                         onPickDiagram={handlePickDiagram}
+                        onMoveToSection={moveToSection}
                     />
                 )}
                 ListHeaderComponent={
@@ -439,8 +503,8 @@ const styles = StyleSheet.create({
   typeBadgeMCQ: { backgroundColor: '#8b5cf6' }, 
   typeText: { fontSize: 10, fontWeight: '800', color: '#555' },
 
-  toolRow: { flexDirection: 'row', gap: 8 },
-  toolBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#f3f4f6', justifyContent: 'center', alignItems: 'center' },
+  toolRow: { flexDirection: 'row', gap: 6 },
+  toolBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#f3f4f6', justifyContent: 'center', alignItems: 'center' },
   
   mcqContainer: { marginBottom: 12 },
   mcqRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
@@ -454,10 +518,16 @@ const styles = StyleSheet.create({
   addDiagramText: { fontSize: 12, fontWeight: '600', color: '#6B7280' },
   addDiagramTextHighlight: { color: '#2563EB' },
 
-  diagramControl: { backgroundColor: '#f0fdf4', padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#dcfce7' },
+  diagramControl: { backgroundColor: '#f0fdf4', padding: 10, borderRadius: 8, marginBottom: 8, borderWidth: 1, borderColor: '#dcfce7' },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   ctrlLabel: { fontSize: 12, fontWeight: '700', color: '#166534', marginBottom: 8 },
   ctrlSub: { fontSize: 11, color: '#15803d' },
+
+  // SIZE BADGES
+  sizeBadge: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
+  sizeBadgeActive: { backgroundColor: '#2563EB' },
+  sizeText: { fontSize: 10, fontWeight: '800', color: '#555' },
+  sizeTextActive: { color: 'white' },
 
   qInput: { fontSize: 16, lineHeight: 24, color: '#374151', minHeight: 40, textAlignVertical: 'top' },
   dimmedInput: { opacity: 0.4, fontStyle: 'italic' },
@@ -474,7 +544,7 @@ const styles = StyleSheet.create({
   fabText: { color: 'white', fontWeight: 'bold', marginLeft: 8, fontSize: 16 },
   previewContainer: { flex: 1, backgroundColor: '#eee' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' },
-  menu: { width: 200, backgroundColor: 'white', borderRadius: 12, padding: 8, shadowColor: "#000", shadowOpacity: 0.1, elevation: 10 },
+  menu: { width: 220, backgroundColor: 'white', borderRadius: 12, padding: 8, shadowColor: "#000", shadowOpacity: 0.1, elevation: 10 },
   menuTitle: { fontSize: 11, fontWeight: '700', color: '#999', padding: 8, textTransform: 'uppercase' },
   menuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 12, borderRadius: 8 },
   menuText: { fontSize: 14, color: '#111' }
