@@ -10,7 +10,8 @@ import { WebView } from 'react-native-webview';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as ImagePicker from 'expo-image-picker'; 
+import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library'; 
 import { transcribeHandwriting } from '../core/services/gemini'; 
 import { saveProject, getProject, ExamProject, Section, Question } from '../core/services/storage'; 
 import { generateExamHtml } from '../core/services/pdf';
@@ -32,6 +33,7 @@ const HeaderEditor = memo(({ header, onChange }: { header: any, onChange: (h: an
   <View style={styles.headerCard}>
     <TextInput style={styles.schoolInput} value={header.schoolName} onChangeText={t => onChange({...header, schoolName: t})} placeholder="SCHOOL NAME" />
     <TextInput style={styles.titleInput} value={header.title} onChangeText={t => onChange({...header, title: t})} placeholder="EXAM TITLE" />
+    <TextInput style={styles.classInput} value={header.className} onChangeText={t => onChange({...header, className: t})} placeholder="Class (e.g., XII-A)" />
     <View style={styles.metaRow}>
       <View style={styles.metaBox}><Text style={styles.label}>DURATION</Text><TextInput style={styles.metaInput} value={header.duration} onChangeText={t => onChange({...header, duration: t})} /></View>
       <View style={styles.metaBox}><Text style={styles.label}>MARKS</Text><TextInput style={styles.metaInput} value={header.totalMarks} onChangeText={t => onChange({...header, totalMarks: t})} /></View>
@@ -203,6 +205,8 @@ export default function EditorScreen() {
   const [isAppending, setIsAppending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportedPdfUri, setExportedPdfUri] = useState<string | null>(null);
 
   // Derived: lightweight section list for move-to-section picker
   const sectionList = sections.map(s => ({ id: s.id, title: s.title }));
@@ -281,15 +285,61 @@ export default function EditorScreen() {
       await saveToDrafts(sections, header, fontTheme);
       const html = await generateExamHtml(header, sections, fontTheme);
       const { uri } = await Print.printToFileAsync({ html, base64: false });
+      setExportedPdfUri(uri);
+      setShowExportMenu(true);
+    } catch (e) { Alert.alert("Export Failed", "Could not generate PDF."); }
+  };
+
+  const handleDownload = async () => {
+    if (!exportedPdfUri) return;
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert("Permission Denied", "Cannot save to Downloads without permission. Try Share instead.");
+        return;
+      }
       
-      const fileName = `${header.title.replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.pdf`;
+      const classStr = header.className ? `_${header.className.replace(/[^a-z0-9]/gi, '_')}` : '';
+      const fileName = `${header.title.replace(/[^a-z0-9]/gi, '_')}${classStr}_${Date.now()}.pdf`;
+      
+      // Save to app folder first
       const docDir = FileSystem.documentDirectory + 'exams/';
       const dirInfo = await FileSystem.getInfoAsync(docDir);
       if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(docDir, { intermediates: true });
-      const newUri = docDir + fileName;
-      await FileSystem.moveAsync({ from: uri, to: newUri });
-      await Sharing.shareAsync(newUri, { UTI: '.pdf', mimeType: 'application/pdf' });
-    } catch (e) { Alert.alert("Export Failed", "Could not generate PDF."); }
+      const appUri = docDir + fileName;
+      await FileSystem.copyAsync({ from: exportedPdfUri, to: appUri });
+      
+      // Save to device Downloads
+      await MediaLibrary.saveToLibraryAsync(exportedPdfUri);
+      
+      setShowExportMenu(false);
+      setExportedPdfUri(null);
+      Alert.alert("Success", "PDF saved to Downloads!");
+    } catch (e) {
+      Alert.alert("Download Failed", "Could not save PDF. Try Share instead.");
+    }
+  };
+
+  const handleShare = async () => {
+    if (!exportedPdfUri) return;
+    try {
+      const classStr = header.className ? `_${header.className.replace(/[^a-z0-9]/gi, '_')}` : '';
+      const fileName = `${header.title.replace(/[^a-z0-9]/gi, '_')}${classStr}_${Date.now()}.pdf`;
+      
+      // Save to app folder
+      const docDir = FileSystem.documentDirectory + 'exams/';
+      const dirInfo = await FileSystem.getInfoAsync(docDir);
+      if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(docDir, { intermediates: true });
+      const appUri = docDir + fileName;
+      await FileSystem.copyAsync({ from: exportedPdfUri, to: appUri });
+      
+      await Sharing.shareAsync(exportedPdfUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      
+      setShowExportMenu(false);
+      setExportedPdfUri(null);
+    } catch (e) {
+      Alert.alert("Share Failed", "Could not share PDF.");
+    }
   };
 
   // --- ACTIONS ---
@@ -453,6 +503,34 @@ export default function EditorScreen() {
            </View>
         </TouchableOpacity>
       </Modal>
+
+      <Modal visible={showExportMenu} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.exportModal}>
+            <Text style={styles.exportTitle}>Export PDF</Text>
+            <Text style={styles.exportSub}>Choose how to save your exam paper</Text>
+            <View style={styles.exportButtons}>
+              <TouchableOpacity onPress={handleDownload} style={styles.exportBtn}>
+                <View style={styles.exportIconCircle}>
+                  <Ionicons name="download" size={32} color="#2563EB" />
+                </View>
+                <Text style={styles.exportBtnText}>Download</Text>
+                <Text style={styles.exportBtnSub}>Save to device</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleShare} style={styles.exportBtn}>
+                <View style={styles.exportIconCircle}>
+                  <Ionicons name="share-social" size={32} color="#2563EB" />
+                </View>
+                <Text style={styles.exportBtnText}>Share</Text>
+                <Text style={styles.exportBtnSub}>Send via apps</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity onPress={() => { setShowExportMenu(false); setExportedPdfUri(null); }} style={styles.exportCancel}>
+              <Text style={styles.exportCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -475,7 +553,8 @@ const styles = StyleSheet.create({
   fontBtnText: { fontSize: 12, fontWeight: '700', color: '#555' },
 
   schoolInput: { fontSize: 18, fontWeight: '800', textAlign: 'center', marginBottom: 8, color: '#111' },
-  titleInput: { fontSize: 14, fontWeight: '600', textAlign: 'center', color: '#555', marginBottom: 20 },
+  titleInput: { fontSize: 14, fontWeight: '600', textAlign: 'center', color: '#555', marginBottom: 6 },
+  classInput: { fontSize: 14, fontWeight: '600', textAlign: 'center', color: '#888', marginBottom: 20 },
   metaRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   metaBox: { flex: 1, backgroundColor: '#f9fafb', padding: 10, borderRadius: 8 },
   label: { fontSize: 10, fontWeight: '700', color: '#9ca3af', marginBottom: 4 },
@@ -552,5 +631,17 @@ const styles = StyleSheet.create({
   menu: { width: 220, backgroundColor: 'white', borderRadius: 12, padding: 8, shadowColor: "#000", shadowOpacity: 0.1, elevation: 10 },
   menuTitle: { fontSize: 11, fontWeight: '700', color: '#999', padding: 8, textTransform: 'uppercase' },
   menuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 12, borderRadius: 8 },
-  menuText: { fontSize: 14, color: '#111' }
+  menuText: { fontSize: 14, color: '#111' },
+  
+  // Export Modal
+  exportModal: { width: '85%', backgroundColor: 'white', borderRadius: 20, padding: 24, alignItems: 'center' },
+  exportTitle: { fontSize: 20, fontWeight: '800', color: '#111', marginBottom: 8 },
+  exportSub: { fontSize: 14, color: '#6B7280', textAlign: 'center', marginBottom: 24 },
+  exportButtons: { flexDirection: 'row', gap: 16, marginBottom: 20 },
+  exportBtn: { flex: 1, alignItems: 'center', backgroundColor: '#F9FAFB', borderRadius: 16, padding: 20, borderWidth: 1, borderColor: '#E5E7EB' },
+  exportIconCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#EFF6FF', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  exportBtnText: { fontSize: 16, fontWeight: '700', color: '#111', marginBottom: 4 },
+  exportBtnSub: { fontSize: 12, color: '#6B7280' },
+  exportCancel: { paddingVertical: 12, paddingHorizontal: 24 },
+  exportCancelText: { fontSize: 16, fontWeight: '600', color: '#6B7280' }
 });

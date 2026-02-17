@@ -1,16 +1,23 @@
 import React, { useState, useCallback } from 'react';
 import { 
-  View, Text, TouchableOpacity, StyleSheet, StatusBar, FlatList, Alert, RefreshControl 
+  View, Text, TouchableOpacity, StyleSheet, StatusBar, FlatList, Alert, RefreshControl, Modal, ActivityIndicator 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { loadProjects, deleteProject, ExamProject } from '../core/services/storage';
+import { loadProjects, deleteProject, ExamProject, getProject } from '../core/services/storage';
+import { generateExamHtml } from '../core/services/pdf';
+import * as Print from 'expo-print';
+import * as MediaLibrary from 'expo-media-library';
 
 export default function DashboardScreen() {
   const router = useRouter();
   const [projects, setProjects] = useState<ExamProject[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [contextMenuId, setContextMenuId] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -46,6 +53,69 @@ export default function DashboardScreen() {
     ]);
   };
 
+  const toggleSelection = (id: string) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedIds(newSelected);
+  };
+
+  const handleBulkDelete = () => {
+    const count = selectedIds.size;
+    Alert.alert(`Delete ${count} drafts?`, "This action cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      { 
+        text: "Delete", 
+        style: "destructive", 
+        onPress: async () => {
+          for (const id of selectedIds) {
+            await deleteProject(id);
+          }
+          setSelectedIds(new Set());
+          setSelectionMode(false);
+          loadData();
+        }
+      }
+    ]);
+  };
+
+  const cancelSelection = () => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const handleExportPdf = async (projectId: string) => {
+    setContextMenuId(null);
+    setIsExporting(true);
+    try {
+      const project = await getProject(projectId);
+      if (!project) {
+        Alert.alert("Error", "Project not found");
+        return;
+      }
+
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert("Permission Denied", "Cannot save to Downloads without permission.");
+        setIsExporting(false);
+        return;
+      }
+
+      const html = await generateExamHtml(project.header, project.sections || [], project.settings?.fontTheme || 'modern');
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+      
+      await MediaLibrary.saveToLibraryAsync(uri);
+      Alert.alert("Success", "PDF saved to Downloads!");
+    } catch (e) {
+      Alert.alert("Export Failed", "Could not generate PDF.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   // --- SAFE COUNT HELPER (The Fix) ---
   const getQuestionCount = (project: ExamProject) => {
     // 1. Check for New "Sections" Format
@@ -60,25 +130,43 @@ export default function DashboardScreen() {
     return 0;
   };
 
-  const renderProject = ({ item }: { item: ExamProject }) => (
-    <TouchableOpacity onPress={() => handleOpenProject(item)} style={styles.fileCard} activeOpacity={0.7}>
-      <View style={styles.fileIcon}>
-        <Ionicons name="document-text" size={24} color="#2563EB" />
-      </View>
-      <View style={styles.fileInfo}>
-        <Text style={styles.fileName} numberOfLines={1}>{item.title || "Untitled Exam"}</Text>
-        <Text style={styles.fileDate}>
-          {new Date(item.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} 
-          {' • '} 
-          {/* SAFE COUNT IMPLEMENTATION */}
-          {getQuestionCount(item)} Questions
-        </Text>
-      </View>
-      <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.moreBtn}>
-        <Ionicons name="trash-outline" size={20} color="#9CA3AF" />
+  const renderProject = ({ item }: { item: ExamProject }) => {
+    const isSelected = selectedIds.has(item.id);
+    return (
+      <TouchableOpacity 
+        onPress={() => selectionMode ? toggleSelection(item.id) : handleOpenProject(item)} 
+        style={[styles.fileCard, isSelected && styles.fileCardSelected]} 
+        activeOpacity={0.7}
+      >
+        {selectionMode && (
+          <View style={styles.checkbox}>
+            <View style={[styles.checkboxInner, isSelected && styles.checkboxChecked]}>
+              {isSelected && <Ionicons name="checkmark" size={16} color="white" />}
+            </View>
+          </View>
+        )}
+        <View style={styles.fileIcon}>
+          <Ionicons name="document-text" size={24} color="#2563EB" />
+        </View>
+        <View style={styles.fileInfo}>
+          <Text style={styles.fileName} numberOfLines={1}>{item.title || "Untitled Exam"}</Text>
+          {item.header?.className && (
+            <Text style={styles.fileClass} numberOfLines={1}>{item.header.className}</Text>
+          )}
+          <Text style={styles.fileDate}>
+            {new Date(item.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} 
+            {' • '} 
+            {getQuestionCount(item)} Questions
+          </Text>
+        </View>
+        {!selectionMode && (
+          <TouchableOpacity onPress={() => setContextMenuId(item.id)} style={styles.moreBtn}>
+            <Ionicons name="ellipsis-vertical" size={20} color="#9CA3AF" />
+          </TouchableOpacity>
+        )}
       </TouchableOpacity>
-    </TouchableOpacity>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -110,6 +198,15 @@ export default function DashboardScreen() {
         <View style={styles.listCard}>
           <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:16}}>
             <Text style={styles.sectionTitle}>Your Drafts</Text>
+            {!selectionMode ? (
+              <TouchableOpacity onPress={() => setSelectionMode(true)} style={styles.selectBtn}>
+                <Text style={styles.selectBtnText}>Select</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={cancelSelection} style={styles.selectBtn}>
+                <Text style={styles.selectBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            )}
           </View>
           
           {projects.length === 0 ? (
@@ -130,6 +227,61 @@ export default function DashboardScreen() {
           )}
         </View>
       </View>
+
+      {selectionMode && selectedIds.size > 0 && (
+        <View style={styles.floatingBar}>
+          <Text style={styles.floatingBarText}>{selectedIds.size} selected</Text>
+          <TouchableOpacity onPress={handleBulkDelete} style={styles.floatingBarBtn}>
+            <Ionicons name="trash" size={20} color="white" />
+            <Text style={styles.floatingBarBtnText}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <Modal visible={contextMenuId !== null} transparent animationType="fade">
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setContextMenuId(null)} activeOpacity={1}>
+          <View style={styles.contextMenu}>
+            <TouchableOpacity 
+              onPress={() => { 
+                const project = projects.find(p => p.id === contextMenuId);
+                if (project) handleOpenProject(project);
+                setContextMenuId(null);
+              }} 
+              style={styles.contextMenuItem}
+            >
+              <Ionicons name="open-outline" size={20} color="#374151" />
+              <Text style={styles.contextMenuText}>Open</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              onPress={() => contextMenuId && handleExportPdf(contextMenuId)} 
+              style={styles.contextMenuItem}
+            >
+              <Ionicons name="download-outline" size={20} color="#2563EB" />
+              <Text style={[styles.contextMenuText, {color: '#2563EB'}]}>Export PDF</Text>
+            </TouchableOpacity>
+            <View style={styles.contextMenuDivider} />
+            <TouchableOpacity 
+              onPress={() => { 
+                if (contextMenuId) handleDelete(contextMenuId);
+                setContextMenuId(null);
+              }} 
+              style={styles.contextMenuItem}
+            >
+              <Ionicons name="trash-outline" size={20} color="#DC2626" />
+              <Text style={[styles.contextMenuText, {color: '#DC2626'}]}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {isExporting && (
+        <View style={styles.loadingOverlay}>
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="large" color="#2563EB" />
+            <Text style={styles.loadingText}>Generating PDF...</Text>
+          </View>
+        </View>
+      )}
 
     </SafeAreaView>
   );
@@ -152,9 +304,28 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginTop: 16 },
   emptySub: { fontSize: 14, color: '#9CA3AF', marginTop: 8 },
   fileCard: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: '#F9FAFB', borderRadius: 16, marginBottom: 10, borderWidth: 1, borderColor: '#F3F4F6' },
+  fileCardSelected: { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' },
+  checkbox: { marginRight: 12 },
+  checkboxInner: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#D1D5DB', justifyContent: 'center', alignItems: 'center' },
+  checkboxChecked: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
   fileIcon: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#EFF6FF', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   fileInfo: { flex: 1 },
   fileName: { fontSize: 15, fontWeight: '600', color: '#1F2937', marginBottom: 2 },
+  fileClass: { fontSize: 12, color: '#9CA3AF', marginBottom: 2 },
   fileDate: { fontSize: 11, color: '#6B7280' },
   moreBtn: { padding: 8 },
+  selectBtn: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#F3F4F6', borderRadius: 8 },
+  selectBtnText: { fontSize: 13, fontWeight: '600', color: '#374151' },
+  floatingBar: { position: 'absolute', bottom: 20, left: 20, right: 20, backgroundColor: '#111', borderRadius: 16, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: "#000", shadowOpacity: 0.3, shadowOffset: { width: 0, height: 4 }, elevation: 8 },
+  floatingBarText: { fontSize: 16, fontWeight: '700', color: 'white' },
+  floatingBarBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#DC2626', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 },
+  floatingBarBtnText: { fontSize: 15, fontWeight: '700', color: 'white' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' },
+  contextMenu: { width: 220, backgroundColor: 'white', borderRadius: 16, padding: 8, shadowColor: "#000", shadowOpacity: 0.2, elevation: 10 },
+  contextMenuItem: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 8 },
+  contextMenuText: { fontSize: 15, fontWeight: '600', color: '#374151' },
+  contextMenuDivider: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 4 },
+  loadingOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  loadingBox: { backgroundColor: 'white', borderRadius: 16, padding: 24, alignItems: 'center', minWidth: 200 },
+  loadingText: { marginTop: 12, fontSize: 16, fontWeight: '600', color: '#374151' }
 });

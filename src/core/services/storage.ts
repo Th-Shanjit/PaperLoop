@@ -8,6 +8,7 @@ const PROJECT_DIR = FileSystem.documentDirectory + 'projects/';
 export interface ExamHeader {
   schoolName: string;
   title: string;
+  className?: string;
   duration: string;
   totalMarks: string;
   instructions: string;
