@@ -15,6 +15,7 @@ import * as MediaLibrary from 'expo-media-library';
 import { transcribeHandwriting } from '../core/services/gemini'; 
 import { saveProject, getProject, ExamProject, Section, Question } from '../core/services/storage'; 
 import { generateExamHtml } from '../core/services/pdf';
+import { getAppSettings } from '../core/services/storage';
 
 // --- HELPERS ---
 const LAYOUT_CYCLE: Record<string, '1-column' | '2-column' | '3-column'> = {
@@ -196,9 +197,8 @@ export default function EditorScreen() {
   const [viewMode, setViewMode] = useState<'edit' | 'preview'>('edit');
   const [previewHtml, setPreviewHtml] = useState<string>('');
   const [header, setHeader] = useState<any>({
-    schoolName: "PaperLoop Academy", title: "Mid-Term Examination", 
-    duration: "90 Mins", totalMarks: "50", 
-    instructions: "1. All questions are compulsory.\n2. Draw diagrams where necessary."
+    schoolName: "", title: "Mid-Term Examination", 
+    duration: "", totalMarks: "50", instructions: ""
   });
   const [sections, setSections] = useState<Section[]>([]);
   const [fontTheme, setFontTheme] = useState<'modern' | 'classic' | 'typewriter'>('modern');
@@ -213,6 +213,9 @@ export default function EditorScreen() {
 
   useEffect(() => {
     const init = async () => {
+      // 1. Fetch user defaults first
+      const appDefaults = await getAppSettings();
+
       if (projectId) {
         const saved = await getProject(projectId);
         if (saved) {
@@ -229,6 +232,16 @@ export default function EditorScreen() {
         }
       } 
       else if (initialData) {
+        // This is a NEW project, apply the user's defaults
+        const newHeader = {
+          ...header,
+          schoolName: appDefaults.organizationName,
+          duration: appDefaults.defaultDuration,
+          instructions: appDefaults.defaultInstructions
+        };
+        setHeader(newHeader);
+        setFontTheme(appDefaults.defaultFontTheme);
+
         try {
           const parsed = JSON.parse(initialData);
           const isSectionData = parsed.length > 0 && parsed[0].questions;
@@ -238,7 +251,7 @@ export default function EditorScreen() {
               questions: sec.questions.map((q: any) => ({ ...q, id: q.id || Date.now().toString() + Math.random() }))
             }));
             setSections(sanitizedSections);
-            saveToDrafts(sanitizedSections, header, fontTheme);
+            saveToDrafts(sanitizedSections, newHeader, appDefaults.defaultFontTheme);
           } else {
             const formatted = parsed.map((q: any, index: number) => ({
               id: Date.now().toString() + index, number: "", text: q.text || q.question_text || "", 
@@ -247,7 +260,7 @@ export default function EditorScreen() {
             }));
             const newSection: Section = { id: Date.now().toString(), title: 'Section A', layout: '1-column', questions: formatted };
             setSections([newSection]);
-            saveToDrafts([newSection], header, fontTheme);
+            saveToDrafts([newSection], newHeader, appDefaults.defaultFontTheme);
           }
         } catch (e) { Alert.alert("Error", "Could not load scan data"); }
       }

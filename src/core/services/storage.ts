@@ -124,3 +124,60 @@ export const renameProject = async (id: string, newTitle: string) => {
     await saveProject(project);
   }
 };
+
+// ============================================================
+// APP SETTINGS & CACHE MANAGEMENT
+// ============================================================
+
+export interface AppSettings {
+  organizationName: string;
+  organizationLogo?: string;
+  defaultDuration: string;
+  defaultInstructions: string;
+  defaultFontTheme: 'modern' | 'classic' | 'typewriter';
+  proLicenseKey?: string;
+}
+
+const SETTINGS_FILE = FileSystem.documentDirectory + 'app_settings.json';
+
+const DEFAULT_SETTINGS: AppSettings = {
+  organizationName: "PaperLoop Academy",
+  defaultDuration: "90 Mins",
+  defaultInstructions: "1. All questions are compulsory.\n2. Draw diagrams where necessary.",
+  defaultFontTheme: 'modern'
+};
+
+export const getAppSettings = async (): Promise<AppSettings> => {
+  try {
+    const info = await FileSystem.getInfoAsync(SETTINGS_FILE);
+    if (!info.exists) return DEFAULT_SETTINGS;
+    const content = await FileSystem.readAsStringAsync(SETTINGS_FILE);
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(content) };
+  } catch (e) {
+    return DEFAULT_SETTINGS;
+  }
+};
+
+export const saveAppSettings = async (settings: AppSettings) => {
+  try {
+    await FileSystem.writeAsStringAsync(SETTINGS_FILE, JSON.stringify(settings));
+  } catch (error) {
+    console.error("Failed to save settings:", error);
+  }
+};
+
+export const clearImageCache = async () => {
+  try {
+    const cacheDir = FileSystem.cacheDirectory;
+    if (!cacheDir) return;
+    const files = await FileSystem.readDirectoryAsync(cacheDir);
+    for (const file of files) {
+      // Clear Expo Image Picker and Image Manipulator temporary files
+      if (file.includes('ImagePicker') || file.includes('ImageManipulator') || file.endsWith('.jpg') || file.endsWith('.png')) {
+        await FileSystem.deleteAsync(cacheDir + file, { idempotent: true });
+      }
+    }
+  } catch (e) {
+    console.error("Failed to clear cache", e);
+  }
+};

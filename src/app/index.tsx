@@ -177,7 +177,7 @@ export default function DashboardScreen() {
           <Text style={styles.greeting}>PaperLoop</Text>
           <Text style={styles.subGreeting}>Digitize & Grade Exams</Text>
         </View>
-        <TouchableOpacity style={styles.settingsBtn}>
+        <TouchableOpacity onPress={() => router.push('/settings')} style={styles.settingsBtn}>
           <Ionicons name="settings-outline" size={24} color="#1F2937" />
         </TouchableOpacity>
       </View>
