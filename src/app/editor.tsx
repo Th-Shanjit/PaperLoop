@@ -202,7 +202,7 @@ export default function EditorScreen() {
   });
   const [sections, setSections] = useState<Section[]>([]);
   const [fontTheme, setFontTheme] = useState<'modern' | 'classic' | 'typewriter'>('modern');
-  const [isAppending, setIsAppending] = useState(false);
+  const [scanStatus, setScanStatus] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -414,18 +414,21 @@ export default function EditorScreen() {
 
   const handleScanToSection = async (secId: string) => {
     try {
-        const result = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
-        if (!result.canceled && result.assets[0]) {
-          setIsAppending(true);
-          const geminiResult = await transcribeHandwriting([{ uri: result.assets[0].uri }]);
-          let newQuestions: Question[] = [];
-          if (geminiResult.sections) {
-             geminiResult.sections.forEach((s: any) => { newQuestions.push(...s.questions); });
-          }
-          setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, ...newQuestions] } : s));
-          Alert.alert("Success", `Added ${newQuestions.length} questions.`);
-        }
-    } catch (e) { Alert.alert("Error", "Scan failed"); } finally { setIsAppending(false); }
+      const result = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
+      if (!result.canceled && result.assets[0]) {
+        const geminiResult = await transcribeHandwriting(
+          [{ uri: result.assets[0].uri }],
+          (statusMsg) => setScanStatus(statusMsg)
+        );
+        let newQuestions: Question[] = [];
+        if (geminiResult.sections) geminiResult.sections.forEach((s: any) => { newQuestions.push(...s.questions); });
+        setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, ...newQuestions] } : s));
+      }
+    } catch (e) {
+      Alert.alert("Error", "Scan failed");
+    } finally {
+      setScanStatus('');
+    }
   };
   const handleHome = () => Alert.alert("Exit?", "Unsaved changes will be lost.", [{ text: "Cancel", style: "cancel" }, { text: "Exit", style: "destructive", onPress: () => router.push("/") }]);
 
@@ -511,6 +514,70 @@ export default function EditorScreen() {
         <TouchableOpacity onPress={handleExport} style={styles.fab}><Ionicons name="share-outline" size={24} color="white" /><Text style={styles.fabText}>Export PDF</Text></TouchableOpacity>
       )}
       
+      {/* SCAN PROGRESS TRACKER OVERLAY */}
+      {scanStatus !== '' && (
+        <View style={styles.loadingOverlay}>
+          <View style={styles.loadingBox}>
+
+            {/* Header */}
+            <View style={styles.loadingHeader}>
+              <View style={styles.loadingIconRing}>
+                <ActivityIndicator size="small" color="#fff" />
+              </View>
+              <Text style={styles.loadingTitle}>Scanning Page</Text>
+            </View>
+
+            {/* Step tracker */}
+            {[
+              { key: 'Optimizing', label: 'Optimizing image',   icon: '⚡' },
+              { key: 'AI reading', label: 'AI reading page',     icon: '🔍' },
+              { key: 'Formatting', label: 'Formatting results',  icon: '✏️' },
+              { key: 'Finalizing', label: 'Finalizing exam',     icon: '✅' },
+            ].map((step, index) => {
+              const isActive    = scanStatus.toLowerCase().includes(step.key.toLowerCase());
+              const stepOrder   = ['Optimizing', 'AI reading', 'Formatting', 'Finalizing'];
+              const activeIndex = stepOrder.findIndex(k => scanStatus.toLowerCase().includes(k.toLowerCase()));
+              const isDone      = activeIndex > index;
+
+              return (
+                <View key={step.key} style={styles.stepRow}>
+                  {/* Left indicator */}
+                  <View style={[
+                    styles.stepDot,
+                    isDone   && styles.stepDotDone,
+                    isActive && styles.stepDotActive,
+                  ]}>
+                    {isDone
+                      ? <Text style={styles.stepDotText}>✓</Text>
+                      : isActive
+                        ? <ActivityIndicator size="small" color="#fff" style={{ transform: [{ scale: 0.6 }] }} />
+                        : <Text style={styles.stepDotText}>{index + 1}</Text>
+                    }
+                  </View>
+
+                  {/* Label */}
+                  <Text style={[
+                    styles.stepLabel,
+                    isDone   && styles.stepLabelDone,
+                    isActive && styles.stepLabelActive,
+                  ]}>
+                    {step.icon} {step.label}
+                  </Text>
+
+                  {/* Connector line (all except last) */}
+                  {index < 3 && (
+                    <View style={[styles.stepConnector, isDone && styles.stepConnectorDone]} />
+                  )}
+                </View>
+              );
+            })}
+
+            {/* Live status text */}
+            <Text style={styles.loadingStatusText}>{scanStatus}</Text>
+          </View>
+        </View>
+      )}
+
       <Modal visible={showSettings} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} onPress={() => setShowSettings(false)} activeOpacity={1}>
            <View style={styles.menu}>
@@ -664,5 +731,69 @@ const styles = StyleSheet.create({
   exportBtnText: { fontSize: 16, fontWeight: '700', color: '#111', marginBottom: 4 },
   exportBtnSub: { fontSize: 12, color: '#6B7280' },
   exportCancel: { paddingVertical: 12, paddingHorizontal: 24 },
-  exportCancelText: { fontSize: 16, fontWeight: '600', color: '#6B7280' }
+  exportCancelText: { fontSize: 16, fontWeight: '600', color: '#6B7280' },
+
+  // --- Scan Progress Overlay ---
+  loadingOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center', alignItems: 'center', zIndex: 999,
+  },
+  loadingBox: {
+    backgroundColor: '#fff', borderRadius: 20, padding: 28,
+    width: 300,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25, shadowRadius: 16, elevation: 12,
+  },
+  loadingHeader: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 24,
+  },
+  loadingIconRing: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#2563EB',
+    justifyContent: 'center', alignItems: 'center',
+    marginRight: 10,
+  },
+  loadingTitle: {
+    fontSize: 17, fontWeight: '800', color: '#111',
+  },
+  stepRow: {
+    flexDirection: 'row', alignItems: 'center',
+    marginBottom: 14, position: 'relative',
+  },
+  stepDot: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: '#E5E7EB',
+    justifyContent: 'center', alignItems: 'center',
+    marginRight: 12, zIndex: 1,
+  },
+  stepDotActive: {
+    backgroundColor: '#2563EB',
+  },
+  stepDotDone: {
+    backgroundColor: '#16A34A',
+  },
+  stepDotText: {
+    fontSize: 11, fontWeight: '700', color: '#9CA3AF',
+  },
+  stepLabel: {
+    fontSize: 14, fontWeight: '500', color: '#9CA3AF', flex: 1,
+  },
+  stepLabelActive: {
+    color: '#2563EB', fontWeight: '700',
+  },
+  stepLabelDone: {
+    color: '#16A34A', fontWeight: '600',
+  },
+  stepConnector: {
+    position: 'absolute', left: 13, top: 28,
+    width: 2, height: 14, backgroundColor: '#E5E7EB', zIndex: 0,
+  },
+  stepConnectorDone: {
+    backgroundColor: '#16A34A',
+  },
+  loadingStatusText: {
+    marginTop: 12, fontSize: 12, color: '#6B7280',
+    fontWeight: '500', textAlign: 'center',
+  },
 });
