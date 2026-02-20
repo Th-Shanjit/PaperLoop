@@ -306,12 +306,6 @@ export default function EditorScreen() {
   const handleDownload = async () => {
     if (!exportedPdfUri) return;
     try {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert("Permission Denied", "Cannot save to Downloads without permission. Try Share instead.");
-        return;
-      }
-      
       const classStr = header.className ? `_${header.className.replace(/[^a-z0-9]/gi, '_')}` : '';
       const fileName = `${header.title.replace(/[^a-z0-9]/gi, '_')}${classStr}_${Date.now()}.pdf`;
       
@@ -322,12 +316,26 @@ export default function EditorScreen() {
       const appUri = docDir + fileName;
       await FileSystem.copyAsync({ from: exportedPdfUri, to: appUri });
       
-      // Save to device Downloads
-      await MediaLibrary.saveToLibraryAsync(exportedPdfUri);
-      
-      setShowExportMenu(false);
-      setExportedPdfUri(null);
-      Alert.alert("Success", "PDF saved to Downloads!");
+      // Try to save to MediaLibrary
+      try {
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status === 'granted') {
+          await MediaLibrary.saveToLibraryAsync(exportedPdfUri);
+          setShowExportMenu(false);
+          setExportedPdfUri(null);
+          Alert.alert("Success", "PDF saved to Downloads!");
+        } else {
+          // Permission denied, use share as fallback
+          setShowExportMenu(false);
+          setExportedPdfUri(null);
+          await Sharing.shareAsync(exportedPdfUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+        }
+      } catch (mediaError) {
+        // MediaLibrary failed (e.g., Expo Go limitations), use share as fallback
+        setShowExportMenu(false);
+        setExportedPdfUri(null);
+        await Sharing.shareAsync(exportedPdfUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      }
     } catch (e) {
       Alert.alert("Download Failed", "Could not save PDF. Try Share instead.");
     }

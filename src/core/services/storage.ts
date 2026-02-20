@@ -23,7 +23,7 @@ export interface Question {
   diagramSize?: 'S' | 'M' | 'L';
   hideText?: boolean;
   isFullWidth?: boolean;
-  type?: 'standard' | 'mcq'; 
+  type?: 'standard' | 'mcq' | 'instruction'; // CRITICAL FIX: Added 'instruction' type
   options?: string[]; 
 }
 

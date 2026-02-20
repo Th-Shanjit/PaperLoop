@@ -25,11 +25,10 @@ const compressImage = async (uri: string): Promise<{ base64: string, width: numb
   }
 };
 
-// CRITICAL FIX: Removed the destructive replace(). 
-// Let the JSON parser handle the raw text so \ce{} stays intact.
 const cleanText = (text: string): string => {
   if (!text) return "";
-  return text.trim(); 
+  let cleaned = text.replace(/\\+\$/g, '$'); // Un-escapes dollar signs for math
+  return cleaned.trim(); 
 };
 
 export const transcribeHandwriting = async (pages: ScannedPage[]) => {
@@ -56,10 +55,10 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
                   number: { type: "STRING" },
                   text: { type: "STRING" },
                   marks: { type: "STRING" },
-                  type: { type: "STRING", enum: ["standard", "mcq"] },
+                  // CRITICAL FIX: Added 'instruction' to schema
+                  type: { type: "STRING", enum: ["standard", "mcq", "instruction"] },
                   options: { type: "ARRAY", items: { type: "STRING" } }, 
-                  has_diagram: { type: "BOOLEAN" },
-                  box_2d: { type: "ARRAY", items: { type: "NUMBER" } }
+                  has_diagram: { type: "BOOLEAN" }
                 },
                 required: ["number", "text", "marks", "type"]
               }
@@ -76,19 +75,17 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
     const page = pages[i];
     const processedImg = await compressImage(page.uri);
     
+    // CRITICAL FIX: Aggressive instructions for serialization and subheadings
     const masterPrompt = `
       Task: You are a strict OCR transcription engine processing an exam paper. 
 
       RULES:
-      1. TRANSCRIBE EXACTLY: Read carefully and transcribe what is on the page. Do NOT invent, guess, or repeat generic questions.
-      2. UNREADABLE TEXT: If handwriting is completely illegible, write "[illegible]". Do not guess.
-      3. MATH & CHEM: Use $...$ for inline math and $$...$$ for block math. You MUST use \\ce{...} for chemistry equations (e.g., $\\ce{H2O}$).
-      4. DIAGRAMS: If a question has a drawn figure, graph, chemical structure, or geometry drawing:
-         - Set "has_diagram": true
-         - CRITICAL: You MUST also provide "box_2d" as [ymin, xmin, ymax, xmax] with values 0-1000 
-           representing the bounding box of the diagram ON THIS PAGE IMAGE.
-         - Example: "box_2d": [400, 50, 800, 500]
-      5. MCQs: Extract multiple choice options into the "options" list.
+      1. TRANSCRIBE EXACTLY: Read carefully and transcribe what is on the page. Do NOT invent or repeat generic questions.
+      2. MATH & CHEM: Use $...$ for inline math and $$...$$ for block math. You MUST use \\ce{...} for chemistry equations.
+      3. SUBHEADINGS / INSTRUCTIONS: If a block of text is a direction for the student (e.g., "Fill in the blanks", "Answer any 5:", "SECTION A - 10 MARKS"), set the type to "instruction". Leave "number" and "marks" completely empty.
+      4. NESTED SERIALIZATION (CRITICAL): If a question has sub-parts (like i, ii, iii), format their numbers clearly (e.g., "1(a)", "1(b)", or "(i)", "(ii)"). DO NOT merge the instruction text into the first sub-question. Keep them separate.
+      5. DIAGRAMS: If a question relies on a drawn figure or graph, set "has_diagram": true.
+      6. MCQs: Extract multiple choice options into the "options" list.
     `;
 
     try {
@@ -122,9 +119,6 @@ export const transcribeHandwriting = async (pages: ScannedPage[]) => {
             marks: q.marks || "",
             type: q.type || 'standard', 
             options: q.options || [],
-            has_diagram: q.has_diagram || false,
-            box_2d: q.box_2d || undefined,
-            pageUri: page.uri, // CRITICAL: Link question back to its source page for cropping
             diagramUri: q.has_diagram ? "NEEDS_CROP" : undefined, 
             hideText: false, 
             isFullWidth: false

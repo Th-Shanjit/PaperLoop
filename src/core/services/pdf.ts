@@ -244,48 +244,48 @@ export const generateExamHtml = async (
         <style>
           ${fontImport}
           * { box-sizing: border-box; margin: 0; padding: 0; }
-          @page { size: A4; margin: 10mm; }
-          body { color: #111; background: white; font-size: 12pt; line-height: 1.35; }
+          
+          /* 1. WIDER MARGINS: Increased from 10mm to 15mm for a professional, framed look */
+          @page { size: A4; margin: 15mm; } 
+          
+          /* 2. BASE TYPOGRAPHY: Better line-height for readability */
+          body { color: #111; background: white; font-size: 11pt; line-height: 1.45; }
 
-          .header { text-align: center; margin-bottom: 12pt; border-bottom: 2pt solid #111; padding-bottom: 8pt; }
-          .school-name { font-size: 14pt; font-weight: 800; text-transform: uppercase; margin-bottom: 2pt; letter-spacing: 1px; }
-          .exam-title { font-size: 12pt; font-weight: 500; margin-bottom: 4pt; color: #444; }
-          .meta-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 11pt; text-transform: uppercase; }
+          .header { text-align: center; margin-bottom: 16pt; border-bottom: 2pt solid #111; padding-bottom: 12pt; }
+          .school-name { font-size: 16pt; font-weight: 800; text-transform: uppercase; margin-bottom: 4pt; letter-spacing: 1px; }
+          .exam-title { font-size: 13pt; font-weight: 500; margin-bottom: 6pt; color: #444; }
+          .meta-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 10.5pt; text-transform: uppercase; }
 
-          .instructions { background: #f8f9fa; padding: 8pt; font-size: 10pt; margin-bottom: 10pt; border-left: 3pt solid #111; line-height: 1.4; }
+          .instructions { background: #f8f9fa; padding: 12pt; font-size: 10pt; margin-bottom: 18pt; border-left: 3pt solid #111; line-height: 1.5; }
 
-          .section-container { margin-bottom: 10pt; }
-          .section-title { font-size: 12pt; font-weight: 800; text-transform: uppercase; margin-bottom: 6pt; padding-bottom: 3pt; }
+          .section-container { margin-bottom: 24pt; }
+          .section-title { font-size: 13pt; font-weight: 800; text-transform: uppercase; margin-bottom: 10pt; padding-bottom: 4pt; }
           .section-title-divider { border-bottom: 1pt solid #ddd; }
 
-          .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 8pt; }
-          .span-all { column-span: all; display: block; margin-bottom: 8pt; }
+          /* 3. QUESTION SPACING: Doubled the bottom margin from 8pt to 16pt so questions are clearly separated */
+          .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 16pt; }
+          .span-all { column-span: all; display: block; margin-bottom: 16pt; }
           .q-row { display: flex; flex-direction: row; }
-          .q-num { width: 22pt; font-weight: 800; font-size: 12pt; flex-shrink: 0; }
-          .q-content { flex: 1; padding-right: 5pt; }
-          .q-text { white-space: pre-wrap; font-size: 12pt; margin-bottom: 3pt; margin-top: 0; }
-          .q-marks { min-width: 45pt; text-align: right; font-weight: 700; font-size: 11pt; white-space: nowrap; flex-shrink: 0; }
+          
+          /* 4. NUMBER COLUMN FIX: Increased width to 38pt to comfortably fit numbers like "18(ii)" without hitting the text */
+          .q-num { width: 38pt; font-weight: 800; font-size: 11.5pt; flex-shrink: 0; }
+          
+          .q-content { flex: 1; padding-right: 10pt; }
+          .q-text { white-space: pre-wrap; font-size: 11.5pt; margin-bottom: 6pt; margin-top: 0; }
+          .q-marks { min-width: 40pt; text-align: right; font-weight: 700; font-size: 10.5pt; white-space: nowrap; flex-shrink: 0; }
 
-          .mcq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2pt 8pt; margin-top: 2pt; }
-          .mcq-opt { font-size: 12pt; display: flex; align-items: flex-start; }
-          .mcq-idx { font-weight: bold; margin-right: 4pt; }
+          /* 5. MCQ SPACING: Added more gap between grid items so options don't clump together */
+          .mcq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6pt 14pt; margin-top: 6pt; }
+          .mcq-opt { font-size: 11pt; display: flex; align-items: flex-start; }
+          .mcq-idx { font-weight: bold; margin-right: 6pt; }
 
-          .diagram-wrapper {
-            background: white;
-            padding: 2pt;
-            margin-top: 4pt;
-          }
-          .diagram-img {
-            display: block;
-            max-width: 100%;
-            max-height: 180px;
-            object-fit: contain;
-          }
+          .diagram-wrapper { background: white; padding: 2pt; margin-top: 8pt; margin-bottom: 4pt; }
+          .diagram-img { display: block; max-width: 100%; max-height: 200px; object-fit: contain; }
 
           sup { font-size: 0.75em; vertical-align: super; }
           sub { font-size: 0.75em; vertical-align: sub; }
 
-          .footer { margin-top: 20pt; text-align: center; font-size: 8pt; color: #aaa; letter-spacing: 1px; clear: both; }
+          .footer { margin-top: 30pt; text-align: center; font-size: 8pt; color: #aaa; letter-spacing: 1px; clear: both; }
         </style>
       </head>
       <body>
@@ -317,6 +317,16 @@ export const generateExamHtml = async (
                 const imgHeight = DIAGRAM_HEIGHTS[sizeKey] || '180px';
                 const marksStr = q.marks && q.marks.trim() !== '' && q.marks !== '0' ? `[ ${q.marks} ]` : '';
                 const qNum = q.number && q.number.trim() !== '' ? q.number : (idx + 1).toString();
+                
+                // CRITICAL FIX: Render 'instruction' types as subheadings without numbers or marks
+                if (q.type === 'instruction') {
+                  return `
+                    <div class="span-all" style="font-weight: 800; font-size: 11.5pt; margin-top: 12pt; margin-bottom: 8pt; color: #111;">
+                      ${latexToHtml(q.text)}
+                    </div>
+                  `;
+                }
+
                 return `
                 <div class="q-item ${q.isFullWidth ? 'span-all' : ''}">
                   <div class="q-row">

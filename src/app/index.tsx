@@ -9,6 +9,7 @@ import { loadProjects, deleteProject, ExamProject, getProject } from '../core/se
 import { generateExamHtml } from '../core/services/pdf';
 import * as Print from 'expo-print';
 import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
 
 export default function DashboardScreen() {
   const router = useRouter();
@@ -94,12 +95,6 @@ export default function DashboardScreen() {
       const project = await getProject(projectId);
       if (!project) {
         Alert.alert("Error", "Project not found");
-        return;
-      }
-
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert("Permission Denied", "Cannot save to Downloads without permission.");
         setIsExporting(false);
         return;
       }
@@ -107,8 +102,20 @@ export default function DashboardScreen() {
       const html = await generateExamHtml(project.header, project.sections || [], project.settings?.fontTheme || 'modern');
       const { uri } = await Print.printToFileAsync({ html, base64: false });
       
-      await MediaLibrary.saveToLibraryAsync(uri);
-      Alert.alert("Success", "PDF saved to Downloads!");
+      // Try to save to MediaLibrary first
+      try {
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status === 'granted') {
+          await MediaLibrary.saveToLibraryAsync(uri);
+          Alert.alert("Success", "PDF saved to Downloads!");
+        } else {
+          // Permission denied, use share as fallback
+          await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+        }
+      } catch (mediaError) {
+        // MediaLibrary failed (e.g., Expo Go limitations), use share as fallback
+        await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      }
     } catch (e) {
       Alert.alert("Export Failed", "Could not generate PDF.");
     } finally {
