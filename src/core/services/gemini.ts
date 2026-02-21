@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as ImageManipulator from 'expo-image-manipulator';
 
-const MODEL_ID = 'gemini-3-flash-preview'; 
+const MODEL_ID = 'gemini-2.5-flash'; 
 
 interface ScannedPage {
   uri: string;
@@ -31,24 +31,41 @@ const cleanText = (text: string): string => {
   return cleaned.trim(); 
 };
 
-// Smarter JSON Rescuer with debugging logs
 const parseJSONSafely = (rawText: string) => {
   let cleaned = rawText.replace(/^```(?:json)?\n?/im, '').replace(/\n?```$/im, '').trim();
   try {
     return JSON.parse(cleaned);
   } catch (err) {
-    console.warn("JSON Parse failed! Text likely cut off. Attempting rescue...");
-    console.log("--- LAST 200 CHARACTERS OF CUT-OFF TEXT ---");
-    console.log(cleaned.substring(cleaned.length - 200));
+    console.warn("JSON Parse failed! Activating Brutal Rescue...");
     
-    const rescues = [
-      cleaned + '"]}]}', cleaned + ']}', cleaned + ']}]}', 
-      cleaned + '}]}', cleaned + '}]}]}'
-    ];
-    for (const rescue of rescues) {
-      try { return JSON.parse(rescue); } catch (e) {}
+    // THE BRUTAL RESCUE ALGORITHM:
+    // If the AI cuts off mid-sentence (e.g. at Question 4), this rewinds the text 
+    // to the last complete '}' bracket (saving Questions 1-3), drops the broken data, 
+    // and forces the arrays closed.
+    
+    const lastCompleteObjectIdx = cleaned.lastIndexOf('}');
+    if (lastCompleteObjectIdx !== -1) {
+      let patched = cleaned.substring(0, lastCompleteObjectIdx + 1);
+      
+      // Depending on where it cut off, it needs different closing tags. 
+      // We try the 4 most likely structural closures for our specific schema.
+      const closingCombinations = [
+        patched + ']}',       // Closes questions array, section object
+        patched + ']}]}',     // Closes questions array, section object, sections array, root object
+        patched + '}]}',      // Closes section object, sections array, root object
+        patched + '}]}]}'     
+      ];
+
+      for (const attempt of closingCombinations) {
+        try {
+          const rescuedJSON = JSON.parse(attempt);
+          console.log("✅ Brutal Rescue Successful! Salvaged partial page data.");
+          return rescuedJSON;
+        } catch (e) {}
+      }
     }
-    throw new Error("JSON parse completely failed after rescue attempts");
+    
+    throw new Error("JSON completely un-rescuable even after brutal truncation");
   }
 };
 
@@ -118,13 +135,13 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
 
       // 2. Instruct the AI on this specific chunk
       const masterPrompt = `Strict OCR. Rules:
-1. You have ${chunk.length} image(s) of an exam in sequential order (Index 0 to ${chunk.length - 1}).
-2. Transcribe exactly.
-3. Math: $...$ inline, $$...$$ block. Chem: \\ce{...}.
-4. Instructions/Subheadings: type="instruction", no number/marks.
-5. Nested numbers: keep separate from text (e.g. "1(a)").
-6. Diagram present: has_diagram=true and provide box_2d [ymin, xmin, ymax, xmax] scaled 0-1000.
-7. MUST provide 'page_index' (0 to ${chunk.length - 1}) for EVERY question so we know which image it came from.`;
+1. Transcribe exactly.
+2. Math: $...$ inline, $$...$$ block. Chem: \\ce{...}.
+3. Instructions/Subheadings: type="instruction", no number/marks.
+4. Nested numbers: keep separate from text (e.g. "1(a)").
+5. Diagram present: has_diagram=true and provide box_2d [ymin, xmin, ymax, xmax] scaled 0-1000.
+6. MCQ options in array.
+7. CANCELLATIONS: If a word has a line struck through it, DO NOT delete it. Wrap it in markdown strikethrough tags like ~~crossed out word~~ so the user can review it.`;
 
       const payload = {
         contents: [{

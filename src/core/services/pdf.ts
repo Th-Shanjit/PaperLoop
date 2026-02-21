@@ -217,6 +217,12 @@ export const generateExamHtml = async (
   sections: Section[],
   fontTheme: 'modern' | 'classic' | 'typewriter'
 ) => {
+  // Helper function to convert markdown strikethrough to HTML
+  const formatTextWithStrikethrough = (text: string) => {
+    if (!text) return "";
+    // Converts ~~word~~ into HTML <del>word</del>
+    return text.replace(/~~(.*?)~~/g, '<del>$1</del>');
+  };
 
   const processedSections = await processImages(sections);
 
@@ -281,6 +287,7 @@ export const generateExamHtml = async (
 
           sup { font-size: 0.75em; vertical-align: super; }
           sub { font-size: 0.75em; vertical-align: sub; }
+          del { text-decoration: line-through; }
 
           .footer { margin-top: 30pt; text-align: center; font-size: 8pt; color: #aaa; letter-spacing: 1px; clear: both; }
         </style>
@@ -319,7 +326,7 @@ export const generateExamHtml = async (
                 if (q.type === 'instruction') {
                   return `
                     <div class="span-all" style="font-weight: 800; font-size: 11.5pt; margin-top: 12pt; margin-bottom: 8pt; color: #111;">
-                      ${latexToHtml(q.text)}
+                      ${formatTextWithStrikethrough(latexToHtml(q.text))}
                     </div>
                   `;
                 }
@@ -329,11 +336,11 @@ export const generateExamHtml = async (
                   <div class="q-row">
                     <div class="q-num">${qNum}.</div>
                     <div class="q-content">
-                      ${!q.hideText && q.text && q.text.trim() !== '' ? `<p class="q-text">${latexToHtml(q.text)}</p>` : ''}
+                      ${!q.hideText && q.text && q.text.trim() !== '' ? `<p class="q-text">${formatTextWithStrikethrough(latexToHtml(q.text))}</p>` : ''}
 
                       ${q.type === 'mcq' && q.options ? `
                         <div class="mcq-grid">
-                          ${q.options.filter(o => o && o.trim() !== '').map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97 + i)})</span> <span>${latexToHtml(opt)}</span></div>`).join('')}
+                          ${q.options.filter(o => o && o.trim() !== '').map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97 + i)})</span> <span>${formatTextWithStrikethrough(latexToHtml(opt))}</span></div>`).join('')}
                         </div>
                       ` : ''}
 
