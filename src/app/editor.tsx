@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback, memo } from 'react';
+import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
 import { 
   View, Text, TextInput, TouchableOpacity, FlatList, Image,
   StyleSheet, StatusBar, Alert, KeyboardAvoidingView, Platform, Switch, ActivityIndicator, Modal 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Print from 'expo-print';
@@ -44,7 +44,8 @@ const HeaderEditor = memo(({ header, onChange }: { header: any, onChange: (h: an
 ));
 
 const QuestionCard = memo(({ 
-  item, sectionId, allSections, onUpdate, onDelete, onMove, onPickDiagram, onMoveToSection 
+  item, sectionId, allSections, onUpdate, onDelete, onMove, onPickDiagram, onMoveToSection,
+  isSelectMode, isSelected, onToggleSelect
 }: { 
   item: Question, sectionId: string, 
   allSections: { id: string; title: string }[],
@@ -52,88 +53,124 @@ const QuestionCard = memo(({
   onDelete: (sId: string, qId: string) => void,
   onMove: (sId: string, idx: number, dir: 'up' | 'down') => void,
   onPickDiagram: (sId: string, qId: string) => void,
-  onMoveToSection: (fromSecId: string, qId: string, toSecId: string) => void
+  onMoveToSection: (fromSecId: string, qId: string, toSecId: string) => void,
+  isSelectMode: boolean, isSelected: boolean, onToggleSelect: (qId: string) => void
 }) => {
   const [showMoveMenu, setShowMoveMenu] = useState(false);
+  
   const updateOption = (idx: number, text: string) => {
     const newOptions = [...(item.options || ["", "", "", ""])];
     newOptions[idx] = text;
     onUpdate(sectionId, item.id, 'options', newOptions);
   };
+
+  const cycleType = () => {
+    const types: ('standard' | 'mcq' | 'instruction')[] = ['standard', 'mcq', 'instruction'];
+    const currentIdx = types.indexOf(item.type || 'standard');
+    const nextType = types[(currentIdx + 1) % types.length];
+    onUpdate(sectionId, item.id, 'type', nextType);
+  };
+
   const otherSections = allSections.filter(s => s.id !== sectionId);
   const currentSize = item.diagramSize || 'M';
+  const isInstruction = item.type === 'instruction';
 
   return (
-    <View style={styles.qCard}>
+    // CRITICAL FIX: Changed from TouchableOpacity back to View to stop it from breaking TextInputs
+    <View style={[styles.qCard, isSelected && styles.qCardSelected]}>
       <View style={styles.qHeader}>
-        <View style={styles.numTag}><TextInput style={styles.numInput} value={item.number} onChangeText={t => onUpdate(sectionId, item.id, 'number', t)} placeholder="#" placeholderTextColor="#888" /></View>
-        <TouchableOpacity onPress={() => onUpdate(sectionId, item.id, 'type', item.type === 'mcq' ? 'standard' : 'mcq')} style={[styles.typeBadge, item.type === 'mcq' ? styles.typeBadgeMCQ : {}]}>
-          <Text style={[styles.typeText, item.type === 'mcq' && {color:'white'}]}>{item.type === 'mcq' ? 'MCQ' : 'TEXT'}</Text>
-        </TouchableOpacity>
-        <View style={styles.toolRow}>
-          <TouchableOpacity onPress={() => onMove(sectionId, parseInt(item.number)-1, 'up')} style={styles.toolBtn}><Ionicons name="arrow-up" size={16} color="#555" /></TouchableOpacity>
-          <TouchableOpacity onPress={() => onMove(sectionId, parseInt(item.number)-1, 'down')} style={styles.toolBtn}><Ionicons name="arrow-down" size={16} color="#555" /></TouchableOpacity>
-          {otherSections.length > 0 && (
-            <TouchableOpacity onPress={() => setShowMoveMenu(true)} style={[styles.toolBtn, {backgroundColor:'#EFF6FF'}]}><Ionicons name="swap-horizontal" size={16} color="#2563EB" /></TouchableOpacity>
+        <View style={{flexDirection:'row', alignItems:'center', gap: 12}}>
+          {isSelectMode && (
+            <Ionicons name={isSelected ? "checkbox" : "square-outline"} size={24} color={isSelected ? "#2563EB" : "#9CA3AF"} />
           )}
-          <TouchableOpacity onPress={() => onDelete(sectionId, item.id)} style={[styles.toolBtn, {backgroundColor:'#fee2e2'}]}><Ionicons name="trash" size={16} color="#dc2626" /></TouchableOpacity>
+          {!isInstruction && (
+            <View style={styles.numTag}>
+              <TextInput style={styles.numInput} value={item.number} onChangeText={t => onUpdate(sectionId, item.id, 'number', t)} placeholder="#" placeholderTextColor="#888" editable={!isSelectMode} />
+            </View>
+          )}
+          <TouchableOpacity onPress={cycleType} disabled={isSelectMode} style={[styles.typeBadge, item.type === 'mcq' ? styles.typeBadgeMCQ : isInstruction ? styles.typeBadgeInstr : {}]}>
+            <Text style={[styles.typeText, (item.type === 'mcq' || isInstruction) && {color:'white'}]}>
+              {isInstruction ? 'INSTR' : item.type === 'mcq' ? 'MCQ' : 'TEXT'}
+            </Text>
+          </TouchableOpacity>
         </View>
+
+        {!isSelectMode && (
+          <View style={styles.toolRow}>
+            <TouchableOpacity onPress={() => onMove(sectionId, parseInt(item.number)-1, 'up')} style={styles.toolBtn}><Ionicons name="arrow-up" size={16} color="#555" /></TouchableOpacity>
+            <TouchableOpacity onPress={() => onMove(sectionId, parseInt(item.number)-1, 'down')} style={styles.toolBtn}><Ionicons name="arrow-down" size={16} color="#555" /></TouchableOpacity>
+            {otherSections.length > 0 && (
+              <TouchableOpacity onPress={() => setShowMoveMenu(true)} style={[styles.toolBtn, {backgroundColor:'#EFF6FF'}]}><Ionicons name="swap-horizontal" size={16} color="#2563EB" /></TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={() => onDelete(sectionId, item.id)} style={[styles.toolBtn, {backgroundColor:'#fee2e2'}]}><Ionicons name="trash" size={16} color="#dc2626" /></TouchableOpacity>
+          </View>
+        )}
       </View>
 
-      <TextInput style={[styles.qInput, item.hideText && styles.dimmedInput]} value={item.text} onChangeText={t => onUpdate(sectionId, item.id, 'text', t)} multiline editable={!item.hideText} placeholder="Question text..." />
+      <TextInput 
+        style={[styles.qInput, item.hideText && styles.dimmedInput, isInstruction && styles.instructionInput]} 
+        value={item.text} 
+        onChangeText={t => onUpdate(sectionId, item.id, 'text', t)} 
+        multiline 
+        editable={!item.hideText && !isSelectMode} 
+        placeholder={isInstruction ? "Enter subheading or instruction..." : "Question text..."} 
+      />
       
-      {item.type === 'mcq' && !item.hideText && (
+      {item.type === 'mcq' && !item.hideText && !isInstruction && (
         <View style={styles.mcqContainer}>
           <View style={styles.mcqRow}>
-            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>A</Text><TextInput style={styles.mcqInput} placeholder="Option A" value={item.options?.[0]} onChangeText={t => updateOption(0, t)}/></View>
-            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>B</Text><TextInput style={styles.mcqInput} placeholder="Option B" value={item.options?.[1]} onChangeText={t => updateOption(1, t)}/></View>
+            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>A</Text><TextInput style={styles.mcqInput} placeholder="Option A" value={item.options?.[0]} onChangeText={t => updateOption(0, t)} editable={!isSelectMode}/></View>
+            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>B</Text><TextInput style={styles.mcqInput} placeholder="Option B" value={item.options?.[1]} onChangeText={t => updateOption(1, t)} editable={!isSelectMode}/></View>
           </View>
           <View style={styles.mcqRow}>
-            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>C</Text><TextInput style={styles.mcqInput} placeholder="Option C" value={item.options?.[2]} onChangeText={t => updateOption(2, t)}/></View>
-            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>D</Text><TextInput style={styles.mcqInput} placeholder="Option D" value={item.options?.[3]} onChangeText={t => updateOption(3, t)}/></View>
+            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>C</Text><TextInput style={styles.mcqInput} placeholder="Option C" value={item.options?.[2]} onChangeText={t => updateOption(2, t)} editable={!isSelectMode}/></View>
+            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>D</Text><TextInput style={styles.mcqInput} placeholder="Option D" value={item.options?.[3]} onChangeText={t => updateOption(3, t)} editable={!isSelectMode}/></View>
           </View>
         </View>
       )}
 
       {/* DIAGRAM AREA */}
-      {!item.diagramUri || item.diagramUri === "NEEDS_CROP" ? (
-        <TouchableOpacity 
-          onPress={() => onPickDiagram(sectionId, item.id)} 
-          style={[styles.addDiagramBtn, item.diagramUri === "NEEDS_CROP" && styles.addDiagramBtnHighlight]}
-        >
-           <Ionicons name={item.diagramUri === "NEEDS_CROP" ? "scan-outline" : "image-outline"} size={18} color={item.diagramUri === "NEEDS_CROP" ? "#2563EB" : "#6B7280"} />
-           <Text style={[styles.addDiagramText, item.diagramUri === "NEEDS_CROP" && styles.addDiagramTextHighlight]}>
-             {item.diagramUri === "NEEDS_CROP" ? "AI Detected Diagram (Tap to crop)" : "Add Diagram"}
-           </Text>
-        </TouchableOpacity>
-      ) : (
-        <View>
-          <Image source={{ uri: item.diagramUri }} style={[styles.qImage, item.hideText && {borderColor:'#2563EB', borderWidth:2}]} resizeMode="contain" />
-           <View style={styles.diagramControl}>
-             <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
-                <Text style={styles.ctrlSub}>Settings</Text>
-                <View style={{flexDirection:'row', gap:8, alignItems: 'center'}}>
-                  <TouchableOpacity onPress={() => onPickDiagram(sectionId, item.id)} style={{marginRight: 4}}>
-                    <Ionicons name="crop" size={18} color="#2563EB" />
-                  </TouchableOpacity>
-                  {/* SIZE PRESETS */}
-                  {(['S','M','L'] as const).map(sz => (
-                    <TouchableOpacity key={sz} onPress={() => onUpdate(sectionId, item.id, 'diagramSize', sz)} style={[styles.sizeBadge, currentSize === sz && styles.sizeBadgeActive]}>
-                      <Text style={[styles.sizeText, currentSize === sz && styles.sizeTextActive]}>{sz}</Text>
+      {(!isInstruction) && (
+        (!item.diagramUri || item.diagramUri === "NEEDS_CROP" ? (
+          <TouchableOpacity 
+            onPress={() => !isSelectMode && onPickDiagram(sectionId, item.id)} 
+            style={[styles.addDiagramBtn, item.diagramUri === "NEEDS_CROP" && styles.addDiagramBtnHighlight]}
+          >
+             <Ionicons name={item.diagramUri === "NEEDS_CROP" ? "scan-outline" : "image-outline"} size={18} color={item.diagramUri === "NEEDS_CROP" ? "#2563EB" : "#6B7280"} />
+             <Text style={[styles.addDiagramText, item.diagramUri === "NEEDS_CROP" && styles.addDiagramTextHighlight]}>
+               {item.diagramUri === "NEEDS_CROP" ? "AI Detected Diagram (Tap to crop)" : "Add Diagram"}
+             </Text>
+          </TouchableOpacity>
+        ) : (
+          <View>
+            <Image source={{ uri: item.diagramUri }} style={[styles.qImage, item.hideText && {borderColor:'#2563EB', borderWidth:2}]} resizeMode="contain" />
+             <View style={styles.diagramControl}>
+               <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
+                  <Text style={styles.ctrlSub}>Settings</Text>
+                  <View style={{flexDirection:'row', gap:8, alignItems: 'center'}}>
+                    <TouchableOpacity onPress={() => !isSelectMode && onPickDiagram(sectionId, item.id)} style={{marginRight: 4}}>
+                      <Ionicons name="crop" size={18} color="#2563EB" />
                     </TouchableOpacity>
-                  ))}
-                  <View style={{width:1, height:16, backgroundColor:'#ddd', marginHorizontal:2}} />
-                  <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>HIDE</Text><Switch value={item.hideText} onValueChange={v => onUpdate(sectionId, item.id, 'hideText', v)} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
-                  <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>FULL</Text><Switch value={item.isFullWidth} onValueChange={v => onUpdate(sectionId, item.id, 'isFullWidth', v)} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
-                </View>
-             </View>
+                    {(['S','M','L'] as const).map(sz => (
+                      <TouchableOpacity key={sz} disabled={isSelectMode} onPress={() => onUpdate(sectionId, item.id, 'diagramSize', sz)} style={[styles.sizeBadge, currentSize === sz && styles.sizeBadgeActive]}>
+                        <Text style={[styles.sizeText, currentSize === sz && styles.sizeTextActive]}>{sz}</Text>
+                      </TouchableOpacity>
+                    ))}
+                    <View style={{width:1, height:16, backgroundColor:'#ddd', marginHorizontal:2}} />
+                    <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>HIDE</Text><Switch value={item.hideText} onValueChange={v => onUpdate(sectionId, item.id, 'hideText', v)} disabled={isSelectMode} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
+                    <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>FULL</Text><Switch value={item.isFullWidth} onValueChange={v => onUpdate(sectionId, item.id, 'isFullWidth', v)} disabled={isSelectMode} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
+                  </View>
+               </View>
+            </View>
           </View>
-        </View>
+        ))
       )}
 
-      <View style={styles.qFooter}><Text style={styles.markLabel}>Marks</Text><TextInput style={styles.markInput} value={item.marks} onChangeText={t => onUpdate(sectionId, item.id, 'marks', t)} keyboardType="numeric" placeholder="-" placeholderTextColor="#bbb" /></View>
+      {!isInstruction && (
+        <View style={styles.qFooter}><Text style={styles.markLabel}>Marks</Text><TextInput style={styles.markInput} value={item.marks} onChangeText={t => onUpdate(sectionId, item.id, 'marks', t)} keyboardType="numeric" placeholder="-" placeholderTextColor="#bbb" editable={!isSelectMode}/></View>
+      )}
 
-      {/* MOVE-TO-SECTION MODAL */}
+      {/* MOVE MODAL */}
       <Modal visible={showMoveMenu} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} onPress={() => setShowMoveMenu(false)} activeOpacity={1}>
           <View style={styles.menu}>
@@ -147,39 +184,50 @@ const QuestionCard = memo(({
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* CRITICAL FIX: Invisible Overlay. This catches taps ONLY when in Select Mode, protecting the inputs underneath! */}
+      {isSelectMode && (
+        <TouchableOpacity
+          style={[StyleSheet.absoluteFill, { zIndex: 10, borderRadius: 16 }]}
+          onPress={() => onToggleSelect(item.id)}
+          activeOpacity={0.4}
+        />
+      )}
     </View>
   );
 });
 
 const SectionCard = memo(({ 
   section, index, allSections, onUpdateSection, onDeleteSection, 
-  onUpdateQ, onDeleteQ, onMoveQ, onAddQ, onPasteScan, onPickDiagram, onMoveToSection
+  onUpdateQ, onDeleteQ, onMoveQ, onAddQ, onPasteScan, onPickDiagram, onMoveToSection,
+  isSelectMode, selectedIds, onToggleSelect
 }: { 
   section: Section, index: number, 
   allSections: { id: string; title: string }[],
   onUpdateSection: (id: string, field: keyof Section, val: any) => void,
   onDeleteSection: (id: string) => void,
-  onUpdateQ: any, onDeleteQ: any, onMoveQ: any, onAddQ: any, onPasteScan: any, onPickDiagram: any, onMoveToSection: any
+  onUpdateQ: any, onDeleteQ: any, onMoveQ: any, onAddQ: any, onPasteScan: any, onPickDiagram: any, onMoveToSection: any,
+  isSelectMode: boolean, selectedIds: Set<string>, onToggleSelect: (qId: string) => void
 }) => (
   <View style={styles.sectionContainer}>
     <View style={styles.sectionHeader}>
-      <TextInput style={styles.sectionTitleInput} value={section.title} onChangeText={t => onUpdateSection(section.id, 'title', t)} placeholder="Section Title" />
+      <TextInput style={styles.sectionTitleInput} value={section.title} onChangeText={t => onUpdateSection(section.id, 'title', t)} placeholder="Section Title" editable={!isSelectMode} />
       <View style={styles.sectionTools}>
-         <TouchableOpacity onPress={() => onUpdateSection(section.id, 'showDivider', !section.showDivider)} style={[styles.dividerBadge, section.showDivider && styles.dividerBadgeActive]}>
+         <TouchableOpacity onPress={() => onUpdateSection(section.id, 'showDivider', !section.showDivider)} style={[styles.dividerBadge, section.showDivider && styles.dividerBadgeActive]} disabled={isSelectMode}>
             <Ionicons name="remove" size={14} color={section.showDivider ? "white" : "#555"} />
          </TouchableOpacity>
-         <TouchableOpacity onPress={() => onUpdateSection(section.id, 'layout', LAYOUT_CYCLE[section.layout] || '1-column')} style={[styles.layoutBadge, section.layout !== '1-column' && styles.layoutBadgeActive]}>
+         <TouchableOpacity onPress={() => onUpdateSection(section.id, 'layout', LAYOUT_CYCLE[section.layout] || '1-column')} style={[styles.layoutBadge, section.layout !== '1-column' && styles.layoutBadgeActive]} disabled={isSelectMode}>
             <Text style={[styles.layoutText, section.layout !== '1-column' && {color:'white'}]}>{LAYOUT_LABEL[section.layout] || '1 Col'}</Text>
          </TouchableOpacity>
-         <TouchableOpacity onPress={() => onDeleteSection(section.id)} style={styles.delSectionBtn}><Ionicons name="close" size={16} color="#ef4444" /></TouchableOpacity>
+         <TouchableOpacity onPress={() => onDeleteSection(section.id)} style={styles.delSectionBtn} disabled={isSelectMode}><Ionicons name="close" size={16} color="#ef4444" /></TouchableOpacity>
       </View>
     </View>
     {section.questions.map((q, idx) => (
-       <QuestionCard key={q.id} item={{...q, number: (idx+1).toString()}} sectionId={section.id} allSections={allSections} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} onPickDiagram={onPickDiagram} onMoveToSection={onMoveToSection}/>
+       <QuestionCard key={q.id} item={{...q, number: (idx+1).toString()}} sectionId={section.id} allSections={allSections} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} onPickDiagram={onPickDiagram} onMoveToSection={onMoveToSection} isSelectMode={isSelectMode} isSelected={selectedIds.has(q.id)} onToggleSelect={onToggleSelect}/>
     ))}
     <View style={styles.sectionFooter}>
-       <TouchableOpacity onPress={() => onPasteScan(section.id)} style={styles.secActionBtn}><Ionicons name="camera" size={16} color="#2563EB" /><Text style={styles.secActionText}>Scan</Text></TouchableOpacity>
-       <TouchableOpacity onPress={() => onAddQ(section.id)} style={styles.secActionBtn}><Ionicons name="add" size={16} color="#2563EB" /><Text style={styles.secActionText}>Question</Text></TouchableOpacity>
+       <TouchableOpacity onPress={() => onPasteScan(section.id)} style={styles.secActionBtn} disabled={isSelectMode}><Ionicons name="camera" size={16} color="#2563EB" /><Text style={styles.secActionText}>Scan</Text></TouchableOpacity>
+       <TouchableOpacity onPress={() => onAddQ(section.id)} style={styles.secActionBtn} disabled={isSelectMode}><Ionicons name="add" size={16} color="#2563EB" /><Text style={styles.secActionText}>Question</Text></TouchableOpacity>
     </View>
   </View>
 ));
@@ -188,6 +236,7 @@ const SectionCard = memo(({
 
 export default function EditorScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const params = useLocalSearchParams(); 
   
   const projectId = Array.isArray(params.projectId) ? params.projectId[0] : params.projectId;
@@ -207,9 +256,61 @@ export default function EditorScreen() {
   const [showSettings, setShowSettings] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [exportedPdfUri, setExportedPdfUri] = useState<string | null>(null);
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // --- NEW: STOP LOSS STATE TRACKERS ---
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const latestState = useRef({ sections, header, fontTheme, currentProjectId });
 
   // Derived: lightweight section list for move-to-section picker
   const sectionList = sections.map(s => ({ id: s.id, title: s.title }));
+
+  // 1. Keep a reference of the absolute latest data so the "Save & Exit" button has the right data
+  useEffect(() => {
+    latestState.current = { sections, header, fontTheme, currentProjectId };
+    setHasUnsavedChanges(true); // If ANY data changes, lock the exit door
+  }, [sections, header, fontTheme, currentProjectId]);
+
+  // 2. The Navigation Interceptor (The Stop Loss)
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      // If the user already hit the manual "Save" button, let them leave smoothly!
+      if (!hasUnsavedChanges) return; 
+
+      // Prevent the default behavior of leaving the screen
+      e.preventDefault();
+
+      Alert.alert(
+        "Save your progress?",
+        "You have unsaved changes. Do you want to save them before leaving?",
+        [
+          { text: "Cancel", style: "cancel", onPress: () => {} },
+          { 
+            text: "Discard", 
+            style: "destructive", 
+            onPress: () => navigation.dispatch(e.data.action) // Force leave without saving
+          },
+          { 
+            text: "Save & Exit", 
+            isPreferred: true,
+            onPress: async () => {
+              // Grab the latest data from the ref
+              const { sections: s, header: h, fontTheme: f, currentProjectId: id } = latestState.current;
+              const project = {
+                id: id, title: h.title, updatedAt: Date.now(),
+                header: h, sections: s, settings: { fontTheme: (f === 'typewriter' ? 'modern' : f) as 'modern' | 'classic' }
+              };
+              await saveProject(project); // Auto-save!
+              navigation.dispatch(e.data.action); // Then let them leave
+            }
+          }
+        ]
+      );
+    });
+
+    return unsubscribe;
+  }, [navigation, hasUnsavedChanges]);
 
   useEffect(() => {
     const init = async () => {
@@ -280,6 +381,7 @@ export default function EditorScreen() {
     setIsSaving(true);
     await saveToDrafts(sections, header, fontTheme);
     setIsSaving(false);
+    setHasUnsavedChanges(false); // <-- Unlocks the exit door!
     Alert.alert("Saved", "Draft updated successfully.");
   };
 
@@ -363,6 +465,16 @@ export default function EditorScreen() {
     }
   };
 
+  const toggleSelectQuestion = (qId: string) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(qId)) {
+      newSelected.delete(qId);
+    } else {
+      newSelected.add(qId);
+    }
+    setSelectedIds(newSelected);
+  };
+
   // --- ACTIONS ---
   const addSection = () => setSections(prev => [...prev, { id: Date.now().toString(), title: "New Section", layout: '1-column', questions: [] }]);
   const updateSection = useCallback((id: string, field: keyof Section, value: any) => setSections(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s)), []);
@@ -430,7 +542,9 @@ export default function EditorScreen() {
       setScanStatus('');
     }
   };
-  const handleHome = () => Alert.alert("Exit?", "Unsaved changes will be lost.", [{ text: "Cancel", style: "cancel" }, { text: "Exit", style: "destructive", onPress: () => router.push("/") }]);
+  const handleHome = () => {
+    router.back(); 
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -471,6 +585,9 @@ export default function EditorScreen() {
                         onUpdateQ={updateQ} onDeleteQ={deleteQ} onMoveQ={moveQ} onAddQ={addQ} onPasteScan={handleScanToSection}
                         onPickDiagram={handlePickDiagram}
                         onMoveToSection={moveToSection}
+                        isSelectMode={isSelectMode}
+                        selectedIds={selectedIds}
+                        onToggleSelect={toggleSelectQuestion}
                     />
                 )}
                 ListHeaderComponent={
@@ -667,12 +784,14 @@ const styles = StyleSheet.create({
 
   // QUESTIONS
   qCard: { backgroundColor: 'white', borderRadius: 16, padding: 16, marginBottom: 16, shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 5, elevation: 1 },
+  qCardSelected: { backgroundColor: '#EFF6FF', borderWidth: 2, borderColor: '#2563EB' },
   qHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
   numTag: { backgroundColor: '#111', width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   numInput: { color: 'white', fontWeight: 'bold', fontSize: 14, textAlign: 'center', padding: 0, includeFontPadding: false },
   
   typeBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: '#e5e7eb', marginLeft: 8 },
-  typeBadgeMCQ: { backgroundColor: '#8b5cf6' }, 
+  typeBadgeMCQ: { backgroundColor: '#8b5cf6' },
+  typeBadgeInstr: { backgroundColor: '#F59E0B' },
   typeText: { fontSize: 10, fontWeight: '800', color: '#555' },
 
   toolRow: { flexDirection: 'row', gap: 6 },
@@ -703,6 +822,7 @@ const styles = StyleSheet.create({
 
   qInput: { fontSize: 16, lineHeight: 24, color: '#374151', minHeight: 40, textAlignVertical: 'top' },
   dimmedInput: { opacity: 0.4, fontStyle: 'italic' },
+  instructionInput: { fontWeight: '700', fontSize: 15, color: '#111' },
   qImage: { width: '100%', height: 180, backgroundColor: '#f9fafb', borderRadius: 8, marginTop: 12 },
   qFooter: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderColor: '#f3f4f6' },
   markLabel: { fontSize: 12, color: '#9ca3af', marginRight: 8 },

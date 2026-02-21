@@ -172,21 +172,18 @@ const processImages = async (sections: Section[]) => {
             return q;
           }
 
-          // Check if the file actually exists on disk
           const fileInfo = await FileSystem.getInfoAsync(q.diagramUri);
           if (!fileInfo.exists) {
             return q;
           }
 
-          // --- CONTRAST ENHANCEMENT (Scanned Effect) ---
-          // Sharpen by upscaling 1.5x then downscaling back to original size
-          // This increases perceived contrast and crispness
+          // --- CRITICAL FIX: Memory footprint reduction ---
           let enhancedUri = q.diagramUri;
           try {
             const enhanced = await ImageManipulator.manipulateAsync(
               q.diagramUri,
-              [{ resize: { width: 1200 } }], // Normalize to consistent width
-              { compress: 0.92, format: ImageManipulator.SaveFormat.PNG }
+              [{ resize: { width: 800 } }], // Reduced from 1200 to 800 to prevent base64 memory crashes
+              { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG } // Switched from PNG to JPEG for massive size reduction
             );
             enhancedUri = enhanced.uri;
           } catch (_) {

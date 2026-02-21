@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as ImageManipulator from 'expo-image-manipulator';
 
-const MODEL_ID = 'gemini-2.5-flash'; 
+const MODEL_ID = 'gemini-3-flash-preview'; 
 
 interface ScannedPage {
   uri: string;
@@ -11,14 +11,12 @@ interface ScannedPage {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// SPEED UPGRADE: Reduced from 1600px to 1024px and compress to 0.6. 
-// Cuts upload payload by ~60%, drastically reducing wait times.
 const compressImage = async (uri: string): Promise<{ base64: string, width: number, height: number, uri: string }> => {
   try {
     const result = await ImageManipulator.manipulateAsync(
       uri,
-      [{ resize: { width: 1024 } }], 
-      { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      [{ resize: { width: 800 } }], 
+      { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
     );
     return { base64: result.base64 || "", width: result.width, height: result.height, uri: result.uri };
   } catch (e) {
@@ -33,13 +31,31 @@ const cleanText = (text: string): string => {
   return cleaned.trim(); 
 };
 
-// UX UPGRADE: Added onProgress callback to feed the UI "Pizza Tracker"
+// Smarter JSON Rescuer with debugging logs
+const parseJSONSafely = (rawText: string) => {
+  let cleaned = rawText.replace(/^```(?:json)?\n?/im, '').replace(/\n?```$/im, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    console.warn("JSON Parse failed! Text likely cut off. Attempting rescue...");
+    console.log("--- LAST 200 CHARACTERS OF CUT-OFF TEXT ---");
+    console.log(cleaned.substring(cleaned.length - 200));
+    
+    const rescues = [
+      cleaned + '"]}]}', cleaned + ']}', cleaned + ']}]}', 
+      cleaned + '}]}', cleaned + '}]}]}'
+    ];
+    for (const rescue of rescues) {
+      try { return JSON.parse(rescue); } catch (e) {}
+    }
+    throw new Error("JSON parse completely failed after rescue attempts");
+  }
+};
+
 export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (msg: string) => void) => {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${apiKey}`;
   
-  let allSections: any[] = [];
-
   const responseSchema = {
     type: "OBJECT",
     properties: {
@@ -60,9 +76,18 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
                   marks: { type: "STRING" },
                   type: { type: "STRING", enum: ["standard", "mcq", "instruction"] },
                   options: { type: "ARRAY", items: { type: "STRING" } }, 
-                  has_diagram: { type: "BOOLEAN" }
+                  has_diagram: { type: "BOOLEAN" },
+                  box_2d: {
+                    type: "ARRAY",
+                    description: "If diagram exists, return [ymin, xmin, ymax, xmax] scaled 0-1000.",
+                    items: { type: "INTEGER" }
+                  },
+                  page_index: { 
+                    type: "INTEGER",
+                    description: "The 0-based index of the image this question was found on."
+                  }
                 },
-                required: ["number", "text", "marks", "type"]
+                required: ["number", "text", "marks", "type", "page_index"]
               }
             }
           },
@@ -73,87 +98,103 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
     required: ["sections"]
   };
 
-  for (let i = 0; i < pages.length; i++) {
-    const page = pages[i];
-    
-    if (onProgress) onProgress(`Optimizing page ${i + 1} of ${pages.length}...`);
-    const processedImg = await compressImage(page.uri);
-    
-    const masterPrompt = `
-      Task: You are a strict OCR transcription engine processing an exam paper. 
+  let allSections: any[] = [];
+  const CHUNK_SIZE = 3; // THE GOLDILOCKS FIX: 3 pages per API call
 
-      RULES:
-      1. TRANSCRIBE EXACTLY: Read carefully and transcribe what is on the page. Do NOT invent or repeat generic questions.
-      2. MATH & CHEM: Use $...$ for inline math and $$...$$ for block math. You MUST use \\ce{...} for chemistry equations.
-      3. SUBHEADINGS / INSTRUCTIONS: If a block of text is a direction for the student (e.g., "Fill in the blanks", "Answer any 5:", "SECTION A - 10 MARKS"), set the type to "instruction". Leave "number" and "marks" completely empty.
-      4. NESTED SERIALIZATION: If a question has sub-parts (like i, ii, iii), format their numbers clearly (e.g., "1(a)", "1(b)", or "(i)", "(ii)"). DO NOT merge the instruction text into the first sub-question. Keep them separate.
-      5. DIAGRAMS: If a question relies on a drawn figure or graph, set "has_diagram": true.
-      6. MCQs: Extract multiple choice options into the "options" list.
-    `;
+  for (let i = 0; i < pages.length; i += CHUNK_SIZE) {
+    const chunk = pages.slice(i, i + CHUNK_SIZE);
+    const isLastChunk = (i + CHUNK_SIZE) >= pages.length;
+    
+    if (onProgress) {
+      onProgress(`Optimizing pages ${i + 1} to ${Math.min(i + CHUNK_SIZE, pages.length)} of ${pages.length}...`);
+    }
 
     try {
-      if (onProgress) onProgress(`AI reading page ${i + 1}...`);
-      const response = await axios.post(url, {
+      // 1. Compress just this chunk
+      const imageParts = await Promise.all(chunk.map(async (page) => {
+        const processedImg = await compressImage(page.uri);
+        return { inlineData: { mimeType: "image/jpeg", data: processedImg.base64 } };
+      }));
+
+      // 2. Instruct the AI on this specific chunk
+      const masterPrompt = `Strict OCR. Rules:
+1. You have ${chunk.length} image(s) of an exam in sequential order (Index 0 to ${chunk.length - 1}).
+2. Transcribe exactly.
+3. Math: $...$ inline, $$...$$ block. Chem: \\ce{...}.
+4. Instructions/Subheadings: type="instruction", no number/marks.
+5. Nested numbers: keep separate from text (e.g. "1(a)").
+6. Diagram present: has_diagram=true and provide box_2d [ymin, xmin, ymax, xmax] scaled 0-1000.
+7. MUST provide 'page_index' (0 to ${chunk.length - 1}) for EVERY question so we know which image it came from.`;
+
+      const payload = {
         contents: [{
-          parts: [
-            { text: masterPrompt }, 
-            { inlineData: { mimeType: "image/jpeg", data: processedImg.base64 } }
-          ]
+          parts: [ { text: masterPrompt }, ...imageParts ]
         }],
         generationConfig: {
           responseMimeType: "application/json",
           responseSchema: responseSchema,
-          temperature: 0.1,
-          maxOutputTokens: 8192 // ROBUST FIX: Safely allows massive JSON without crashing mid-sentence
+          temperature: 0.1, // Bumped slightly to 0.1 to prevent hallucination loops in Preview models
+          maxOutputTokens: 8192
         }
-      });
+      };
 
-      if (onProgress) onProgress(`Formatting page ${i + 1}...`);
-      let rawText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-      rawText = rawText.replace(/^```(?:json)?\n?/im, '').replace(/\n?```$/im, '').trim();
-      const data = JSON.parse(rawText);
-
-      if (data.sections) {
-        const processedSections = data.sections.map((sec: any) => ({
-          id: Date.now().toString() + Math.random(),
-          title: sec.title || "Section",
-          layout: sec.layout_hint || "1-column",
-          questions: sec.questions.map((q: any) => ({
-            id: Date.now().toString() + Math.random(),
-            number: q.number || "",
-            text: cleanText(q.text), 
-            marks: q.marks || "",
-            type: q.type || 'standard', 
-            options: q.options || [],
-            diagramUri: q.has_diagram ? "NEEDS_CROP" : undefined, 
-            hideText: false, 
-            isFullWidth: false
-          }))
-        }));
-        allSections.push(...processedSections);
+      // 3. Rate Limit Protection: Wait 2 seconds between chunks to avoid 503 errors
+      if (i > 0) {
+        if (onProgress) onProgress(`Cooling down API to prevent rate limits...`);
+        await sleep(2500); 
       }
+
+      if (onProgress) onProgress(`AI reading pages ${i + 1}-${Math.min(i + CHUNK_SIZE, pages.length)}...`);
+      const response = await axios.post(url, payload);
+
+      let rawText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+      const data = parseJSONSafely(rawText);
+      
+      // 4. Map the AI's local chunk index back to the absolute real-world page index
+      if (data.sections) {
+        data.sections.forEach((sec: any) => {
+          const processedQs = sec.questions.map((q: any) => {
+            const localIndex = (q.page_index !== undefined && q.page_index < chunk.length) ? q.page_index : 0;
+            const absoluteIndex = i + localIndex; // Converts chunk index '0' to real page '3'
+            
+            return {
+              id: Date.now().toString() + Math.random(),
+              number: q.number || "",
+              text: cleanText(q.text), 
+              marks: q.marks || "",
+              type: q.type || 'standard', 
+              options: q.options || [],
+              has_diagram: q.has_diagram, 
+              box_2d: q.box_2d,           
+              pageUri: pages[absoluteIndex].uri, // Matches back to correct file for the Cropper
+              diagramUri: q.has_diagram ? "NEEDS_CROP" : undefined, 
+              hideText: false, 
+              isFullWidth: false
+            };
+          });
+
+          allSections.push({
+            id: Date.now().toString() + Math.random(),
+            title: sec.title || "Section",
+            layout: sec.layout_hint || "1-column",
+            questions: processedQs
+          });
+        });
+      }
+        
     } catch (e: any) {
-      console.error(`Page ${i + 1} Failed:`, e.message);
-      // ROBUST FIX: If a page fails, insert a placeholder instead of crashing the app
+      console.error(`Chunk starting at page ${i + 1} Failed:`, e.message);
       allSections.push({
         id: Date.now().toString() + Math.random(),
-        title: `⚠️ Page ${i + 1} Scan Failed`,
+        title: `⚠️ Pages ${i + 1}-${Math.min(i + CHUNK_SIZE, pages.length)} Failed`,
         layout: '1-column',
         questions: [{
-          id: Date.now().toString(),
-          number: "!",
-          text: "This page was too dense or unreadable. Please try scanning it again by itself.",
-          marks: "",
-          type: "standard",
-          hideText: false,
-          isFullWidth: true
+          id: Date.now().toString(), number: "!", text: "Scan failed for these pages. Try scanning them individually.", marks: "", type: "standard", hideText: false
         }]
       });
     }
-    if (i < pages.length - 1) await sleep(500);
   }
-  
-  if (onProgress) onProgress("Finalizing exam...");
-  await sleep(500); // Tiny pause so the user reads the final success state
+
+  if (onProgress) onProgress("Formatting final exam...");
   return { sections: allSections };
 };

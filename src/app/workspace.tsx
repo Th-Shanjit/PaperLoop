@@ -8,15 +8,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
-import { 
-  getSessionPages, 
-  removePageFromSession, 
-  updatePageInSession, 
-  swapPagesInSession, 
-  clearSession,
-  ScannedPage,
-  currentSessionPages 
-} from '../core/store/session';
+import { getSessionPages, removePageFromSession, updatePageInSession, swapPagesInSession, clearSession, ScannedPage, currentSessionPages } from '../core/store/session';
 import { transcribeHandwriting } from '../core/services/gemini';
 
 export default function WorkspaceScreen() {
@@ -24,7 +16,7 @@ export default function WorkspaceScreen() {
   const [pages, setPages] = useState<ScannedPage[]>([]);
   const [selectedImage, setSelectedImage] = useState<ScannedPage | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  
+  const [scanStatus, setScanStatus] = useState<string>('');   
   const [reorderModalVisible, setReorderModalVisible] = useState(false);
   const [targetIndex, setTargetIndex] = useState<string>("");
   const [sourceIndex, setSourceIndex] = useState<number | null>(null);
@@ -87,15 +79,18 @@ export default function WorkspaceScreen() {
   const handleAnalyze = async () => {
     if (pages.length === 0) return;
     setIsAnalyzing(true);
+    setScanStatus('Warming up AI engine...'); // Trigger the overlay
     
     try {
-      const result = await transcribeHandwriting(pages);
+      // Pass the callback here!
+      const result = await transcribeHandwriting(pages, (msg) => setScanStatus(msg));
       
       // Process diagrams for cropping (works for both sections and questions)
       const processDiagramCrop = async (q: any, qIndex: number) => {
         let finalQ = { ...q };
         if (q.has_diagram && q.box_2d && q.pageUri) {
           try {
+            setScanStatus(`Cropping diagram ${qIndex + 1}...`); // Feed diagram cropping status too!
             console.log(`🔍 Cropping diagram for Q${qIndex + 1}, box_2d:`, q.box_2d, "from:", q.pageUri);
 
             const { width: imgW, height: imgH } = await new Promise((resolve) => {
@@ -198,6 +193,7 @@ export default function WorkspaceScreen() {
       console.error(e);
     } finally {
       setIsAnalyzing(false);
+      setScanStatus(''); // Close the overlay
     }
   };
 
@@ -329,6 +325,46 @@ export default function WorkspaceScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* SCAN PROGRESS TRACKER OVERLAY */}
+      {scanStatus !== '' && (
+        <View style={styles.loadingOverlay}>
+          <View style={styles.loadingBox}>
+            <View style={styles.loadingHeader}>
+              <View style={styles.loadingIconRing}>
+                <ActivityIndicator size="small" color="#fff" />
+              </View>
+              <Text style={styles.loadingTitle}>Scanning Pages</Text>
+            </View>
+
+            {[
+              { key: 'Optimizing', label: 'Optimizing images',   icon: '⚡' },
+              { key: 'AI reading', label: 'AI reading text',     icon: '🔍' },
+              { key: 'Formatting', label: 'Formatting results',  icon: '✏️' },
+              { key: 'Finalizing', label: 'Finalizing exam',     icon: '✅' },
+              { key: 'Cropping',   label: 'Extracting diagrams', icon: '✂️' }
+            ].map((step, index) => {
+              const isActive    = scanStatus.toLowerCase().includes(step.key.toLowerCase());
+              const stepOrder   = ['Optimizing', 'AI reading', 'Formatting', 'Finalizing', 'Cropping'];
+              const activeIndex = stepOrder.findIndex(k => scanStatus.toLowerCase().includes(k.toLowerCase()));
+              const isDone      = activeIndex > index;
+
+              return (
+                <View key={step.key} style={styles.stepRow}>
+                  <View style={[styles.stepDot, isDone && styles.stepDotDone, isActive && styles.stepDotActive]}>
+                    {isDone ? <Text style={styles.stepDotText}>✓</Text> : isActive ? <ActivityIndicator size="small" color="#fff" style={{ transform: [{ scale: 0.6 }] }} /> : <Text style={styles.stepDotText}>{index + 1}</Text>}
+                  </View>
+                  <Text style={[styles.stepLabel, isDone && styles.stepLabelDone, isActive && styles.stepLabelActive]}>
+                    {step.icon} {step.label}
+                  </Text>
+                  {index < 4 && <View style={[styles.stepConnector, isDone && styles.stepConnectorDone]} />}
+                </View>
+              );
+            })}
+            <Text style={styles.loadingStatusText}>{scanStatus}</Text>
+          </View>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -367,5 +403,23 @@ const styles = StyleSheet.create({
   modalBackdrop: { ...StyleSheet.absoluteFillObject },
   fsContent: { width: '90%', height: '80%', backgroundColor: 'white', borderRadius: 16, overflow: 'hidden' },
   fullImage: { width: '100%', height: '100%' },
-  fsClose: { position: 'absolute', top: 16, right: 16, backgroundColor: 'rgba(255,255,255,0.8)', borderRadius: 20, padding: 8 }
+  fsClose: { position: 'absolute', top: 16, right: 16, backgroundColor: 'rgba(255,255,255,0.8)', borderRadius: 20, padding: 8 },
+
+  // --- Scan Progress Overlay ---
+  loadingOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', alignItems: 'center', zIndex: 999 },
+  loadingBox: { backgroundColor: '#fff', borderRadius: 20, padding: 28, width: 300, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 16, elevation: 12 },
+  loadingHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
+  loadingIconRing: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#2563EB', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  loadingTitle: { fontSize: 17, fontWeight: '800', color: '#111' },
+  stepRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, position: 'relative' },
+  stepDot: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#E5E7EB', justifyContent: 'center', alignItems: 'center', marginRight: 12, zIndex: 1 },
+  stepDotActive: { backgroundColor: '#2563EB' },
+  stepDotDone: { backgroundColor: '#16A34A' },
+  stepDotText: { fontSize: 11, fontWeight: '700', color: '#9CA3AF' },
+  stepLabel: { fontSize: 14, fontWeight: '500', color: '#9CA3AF', flex: 1 },
+  stepLabelActive: { color: '#2563EB', fontWeight: '700' },
+  stepLabelDone: { color: '#16A34A', fontWeight: '600' },
+  stepConnector: { position: 'absolute', left: 13, top: 28, width: 2, height: 14, backgroundColor: '#E5E7EB', zIndex: 0 },
+  stepConnectorDone: { backgroundColor: '#16A34A' },
+  loadingStatusText: { marginTop: 12, fontSize: 12, color: '#6B7280', fontWeight: '500', textAlign: 'center' }
 });
