@@ -373,6 +373,7 @@ export default function EditorScreen() {
   const [exportedPdfUri, setExportedPdfUri] = useState<string | null>(null);
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkMoveMenu, setShowBulkMoveMenu] = useState(false);
 
   // --- NEW: STOP LOSS STATE TRACKERS ---
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -540,7 +541,8 @@ export default function EditorScreen() {
       try {
         const { status } = await MediaLibrary.requestPermissionsAsync();
         if (status === 'granted') {
-          await MediaLibrary.saveToLibraryAsync(exportedPdfUri);
+          // FIX: Save the cleanly named appUri, NOT the gibberish exportedPdfUri!
+          await MediaLibrary.saveToLibraryAsync(appUri);
           setShowExportMenu(false);
           setExportedPdfUri(null);
           Alert.alert("Success", "PDF saved to Downloads!");
@@ -548,13 +550,15 @@ export default function EditorScreen() {
           // Permission denied, use share as fallback
           setShowExportMenu(false);
           setExportedPdfUri(null);
-          await Sharing.shareAsync(exportedPdfUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+          // FIX: Share the cleanly named appUri!
+          await Sharing.shareAsync(appUri, { UTI: '.pdf', mimeType: 'application/pdf' });
         }
       } catch (mediaError) {
         // MediaLibrary failed (e.g., Expo Go limitations), use share as fallback
         setShowExportMenu(false);
         setExportedPdfUri(null);
-        await Sharing.shareAsync(exportedPdfUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+        // FIX: Share the cleanly named appUri!
+        await Sharing.shareAsync(appUri, { UTI: '.pdf', mimeType: 'application/pdf' });
       }
     } catch (e) {
       Alert.alert("Download Failed", "Could not save PDF. Try Share instead.");
@@ -577,7 +581,8 @@ export default function EditorScreen() {
       const appUri = docDir + fileName;
       await FileSystem.copyAsync({ from: exportedPdfUri, to: appUri });
       
-      await Sharing.shareAsync(exportedPdfUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      // FIX: Share the cleanly named appUri!
+      await Sharing.shareAsync(appUri, { UTI: '.pdf', mimeType: 'application/pdf' });
       
       setShowExportMenu(false);
       setExportedPdfUri(null);
@@ -628,6 +633,29 @@ export default function EditorScreen() {
       });
     });
   }, []);
+
+  // THE NEW BULK MOVE LOGIC
+  const handleBulkMove = (toSecId: string) => {
+    setSections(prev => {
+      // 1. Find all selected questions across all sections
+      const movingQs: Question[] = [];
+      prev.forEach(s => {
+        s.questions.forEach(q => {
+          if (selectedIds.has(q.id)) movingQs.push(q);
+        });
+      });
+
+      // 2. Remove them from old sections and dump into the new one
+      return prev.map(s => {
+        if (s.id === toSecId) return { ...s, questions: [...s.questions, ...movingQs] };
+        return { ...s, questions: s.questions.filter(q => !selectedIds.has(q.id)) };
+      });
+    });
+    // Reset the UI
+    setSelectedIds(new Set());
+    setIsSelectMode(false);
+    setShowBulkMoveMenu(false);
+  };
   
   // NATIVE CROP HANDLER
   const handlePickDiagram = async (secId: string, qId: string) => {
@@ -692,9 +720,19 @@ export default function EditorScreen() {
            </TouchableOpacity>
         </View>
 
-        <TouchableOpacity onPress={handleManualSave} style={styles.saveBtn} disabled={isSaving}>
-          {isSaving ? <ActivityIndicator size="small" color="#2563EB"/> : <Ionicons name="save-outline" size={20} color="#2563EB" />}
-        </TouchableOpacity>
+        {/* ADD THIS BUTTON RIGHT BEFORE THE SAVE BUTTON */}
+        <View style={{flexDirection: 'row', gap: 10}}>
+          <TouchableOpacity 
+            onPress={() => { setIsSelectMode(!isSelectMode); setSelectedIds(new Set()); }} 
+            style={[styles.saveBtn, isSelectMode && {backgroundColor:'#2563EB'}]}
+          >
+            <Ionicons name="checkbox-outline" size={20} color={isSelectMode ? "white" : "#2563EB"} />
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={handleManualSave} style={styles.saveBtn} disabled={isSaving}>
+            {isSaving ? <ActivityIndicator size="small" color="#2563EB"/> : <Ionicons name="save-outline" size={20} color="#2563EB" />}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* CONTENT AREA */}
@@ -901,6 +939,31 @@ export default function EditorScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* BULK ACTION BAR */}
+      {isSelectMode && selectedIds.size > 0 && (
+        <View style={styles.bulkActionBar}>
+          <Text style={styles.bulkActionText}>{selectedIds.size} Selected</Text>
+          <TouchableOpacity onPress={() => setShowBulkMoveMenu(true)} style={styles.bulkActionBtn}>
+            <Text style={styles.bulkActionBtnText}>Move to Section</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* BULK MOVE MODAL */}
+      <Modal visible={showBulkMoveMenu} transparent animationType="fade">
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setShowBulkMoveMenu(false)} activeOpacity={1}>
+          <View style={styles.menu}>
+            <Text style={styles.menuTitle}>Move {selectedIds.size} Items To...</Text>
+            {sectionList.map(s => (
+              <TouchableOpacity key={s.id} style={styles.menuItem} onPress={() => handleBulkMove(s.id)}>
+                <Text style={styles.menuText}>{s.title}</Text>
+                <Ionicons name="arrow-forward" size={14} color="#2563EB" />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1089,4 +1152,10 @@ const styles = StyleSheet.create({
     marginTop: 12, fontSize: 12, color: '#6B7280',
     fontWeight: '500', textAlign: 'center',
   },
+
+  // --- Bulk Action Bar Styles ---
+  bulkActionBar: { position: 'absolute', bottom: 30, alignSelf: 'center', backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 14, borderRadius: 32, width: '80%', shadowColor: "#000", shadowOpacity: 0.3, shadowOffset: {width:0, height:6}, elevation: 8 },
+  bulkActionText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
+  bulkActionBtn: { backgroundColor: '#2563EB', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
+  bulkActionBtnText: { color: 'white', fontWeight: '700', fontSize: 13 },
 });

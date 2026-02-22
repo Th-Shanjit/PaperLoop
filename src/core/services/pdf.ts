@@ -221,14 +221,13 @@ export const generateExamHtml = async (
   const formatRichText = (text: string) => {
     if (!text) return "";
     
-    // 1. Fix markdown strikethroughs
+    // 1. Fix markdown strikethroughs, bolds, and italics (Like WhatsApp!)
     let formatted = text.replace(/~~(.*?)~~/g, '<del>$1</del>');
+    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>'); // **Bold**
+    formatted = formatted.replace(/\*(.*?)\*/g, '<i>$1</i>');     // *Italic*
     
-    // 2. The LaTeX Rescuer: 
-    // Catches ce{H2O}, $ce\{H2O\}$, \ce{H2O}, etc., and perfectly formats them for MathJax
+    // 2. The LaTeX Rescuer
     formatted = formatted.replace(/\$?\\?ce\\?\{([^}]+)\\?\}\$?/g, '$\\ce{$1}$');
-    
-    // 3. Fix AI superscript hallucinations (the AI used \wedge instead of ^)
     formatted = formatted.replace(/\\wedge/g, '^');
     formatted = formatted.replace(/\\Lambda/g, '^');
 
@@ -268,21 +267,22 @@ export const generateExamHtml = async (
           .header { text-align: center; margin-bottom: 16pt; border-bottom: 2pt solid #111; padding-bottom: 12pt; }
           .school-name { font-size: 16pt; font-weight: 800; text-transform: uppercase; margin-bottom: 4pt; letter-spacing: 1px; }
           .exam-title { font-size: 13pt; font-weight: 500; margin-bottom: 6pt; color: #444; }
+          .exam-class { font-size: 12pt; font-weight: 600; text-transform: uppercase; margin-bottom: 8pt; color: #555; }
           .meta-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 10.5pt; text-transform: uppercase; }
 
           .instructions { background: #f8f9fa; padding: 12pt; font-size: 10pt; margin-bottom: 18pt; border-left: 3pt solid #111; line-height: 1.5; }
 
           .section-container { margin-bottom: 24pt; }
           .section-title { font-size: 13pt; font-weight: 800; text-transform: uppercase; margin-bottom: 10pt; padding-bottom: 4pt; }
-          .section-title-divider { border-bottom: 1pt solid #ddd; }
+          .section-title-divider { border-top: 2pt solid #111; padding-top: 16pt; margin-top: 16pt; }
 
           /* 3. QUESTION SPACING: Doubled the bottom margin from 8pt to 16pt so questions are clearly separated */
           .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 16pt; }
           .span-all { column-span: all; display: block; margin-bottom: 16pt; }
           .q-row { display: flex; flex-direction: row; }
           
-          /* 4. NUMBER COLUMN FIX: Increased width to 38pt to comfortably fit numbers like "18(ii)" without hitting the text */
-          .q-num { width: 38pt; font-weight: 800; font-size: 11.5pt; flex-shrink: 0; }
+          /* 4. NUMBER COLUMN FIX: Remove fixed width so long sub-numbers like 1(b)(i) don't break margins */
+          .q-num { min-width: 38pt; width: auto; padding-right: 8pt; font-weight: 800; font-size: 11.5pt; flex-shrink: 0; }
           
           .q-content { flex: 1; padding-right: 10pt; }
           .q-text { white-space: pre-wrap; font-size: 11.5pt; margin-bottom: 6pt; margin-top: 0; }
@@ -307,6 +307,7 @@ export const generateExamHtml = async (
         <div class="header">
           <div class="school-name">${latexToHtml(header.schoolName)}</div>
           <div class="exam-title">${latexToHtml(header.title)}</div>
+          ${header.className ? `<div class="exam-class">${latexToHtml(header.className)}</div>` : ''}
           <div class="meta-row">
             <span>Duration: ${header.duration}</span>
             <span>Max Marks: ${header.totalMarks}</span>
@@ -337,7 +338,7 @@ export const generateExamHtml = async (
                 if (q.type === 'instruction') {
                   return `
                     <div class="span-all" style="font-weight: 800; font-size: 11.5pt; margin-top: 12pt; margin-bottom: 8pt; color: #111;">
-                      ${formatRichText(latexToHtml(q.text))}
+                      ${latexToHtml(formatRichText(q.text))}
                     </div>
                   `;
                 }
@@ -347,11 +348,11 @@ export const generateExamHtml = async (
                   <div class="q-row">
                     <div class="q-num">${qNum}.</div>
                     <div class="q-content">
-                      ${!q.hideText && q.text && q.text.trim() !== '' ? `<p class="q-text">${formatRichText(latexToHtml(q.text))}</p>` : ''}
+                      ${!q.hideText && q.text && q.text.trim() !== '' ? `<p class="q-text">${latexToHtml(formatRichText(q.text))}</p>` : ''}
 
                       ${q.type === 'mcq' && q.options ? `
                         <div class="mcq-grid">
-                          ${q.options.filter(o => o && o.trim() !== '').map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97 + i)})</span> <span>${formatRichText(latexToHtml(opt))}</span></div>`).join('')}
+                         ${q.options.filter(o => o && o.trim() !== '').map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97 + i)})</span> <span>${latexToHtml(formatRichText(opt))}</span></div>`).join('')}
                         </div>
                       ` : ''}
 
