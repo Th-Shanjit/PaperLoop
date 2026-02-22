@@ -217,11 +217,22 @@ export const generateExamHtml = async (
   sections: Section[],
   fontTheme: 'modern' | 'classic' | 'typewriter'
 ) => {
-  // Helper function to convert markdown strikethrough to HTML
-  const formatTextWithStrikethrough = (text: string) => {
+  // Replace your existing formatter with this:
+  const formatRichText = (text: string) => {
     if (!text) return "";
-    // Converts ~~word~~ into HTML <del>word</del>
-    return text.replace(/~~(.*?)~~/g, '<del>$1</del>');
+    
+    // 1. Fix markdown strikethroughs
+    let formatted = text.replace(/~~(.*?)~~/g, '<del>$1</del>');
+    
+    // 2. The LaTeX Rescuer: 
+    // Catches ce{H2O}, $ce\{H2O\}$, \ce{H2O}, etc., and perfectly formats them for MathJax
+    formatted = formatted.replace(/\$?\\?ce\\?\{([^}]+)\\?\}\$?/g, '$\\ce{$1}$');
+    
+    // 3. Fix AI superscript hallucinations (the AI used \wedge instead of ^)
+    formatted = formatted.replace(/\\wedge/g, '^');
+    formatted = formatted.replace(/\\Lambda/g, '^');
+
+    return formatted;
   };
 
   const processedSections = await processImages(sections);
@@ -326,7 +337,7 @@ export const generateExamHtml = async (
                 if (q.type === 'instruction') {
                   return `
                     <div class="span-all" style="font-weight: 800; font-size: 11.5pt; margin-top: 12pt; margin-bottom: 8pt; color: #111;">
-                      ${formatTextWithStrikethrough(latexToHtml(q.text))}
+                      ${formatRichText(latexToHtml(q.text))}
                     </div>
                   `;
                 }
@@ -336,11 +347,11 @@ export const generateExamHtml = async (
                   <div class="q-row">
                     <div class="q-num">${qNum}.</div>
                     <div class="q-content">
-                      ${!q.hideText && q.text && q.text.trim() !== '' ? `<p class="q-text">${formatTextWithStrikethrough(latexToHtml(q.text))}</p>` : ''}
+                      ${!q.hideText && q.text && q.text.trim() !== '' ? `<p class="q-text">${formatRichText(latexToHtml(q.text))}</p>` : ''}
 
                       ${q.type === 'mcq' && q.options ? `
                         <div class="mcq-grid">
-                          ${q.options.filter(o => o && o.trim() !== '').map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97 + i)})</span> <span>${formatTextWithStrikethrough(latexToHtml(opt))}</span></div>`).join('')}
+                          ${q.options.filter(o => o && o.trim() !== '').map((opt, i) => `<div class="mcq-opt"><span class="mcq-idx">(${String.fromCharCode(97 + i)})</span> <span>${formatRichText(latexToHtml(opt))}</span></div>`).join('')}
                         </div>
                       ` : ''}
 

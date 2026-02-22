@@ -135,13 +135,14 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
 
       // 2. Instruct the AI on this specific chunk
       const masterPrompt = `Strict OCR. Rules:
-1. Transcribe exactly.
-2. Math: $...$ inline, $$...$$ block. Chem: \\ce{...}.
-3. Instructions/Subheadings: type="instruction", no number/marks.
-4. Nested numbers: keep separate from text (e.g. "1(a)").
-5. Diagram present: has_diagram=true and provide box_2d [ymin, xmin, ymax, xmax] scaled 0-1000.
-6. MCQ options in array.
-7. CANCELLATIONS: If a word has a line struck through it, DO NOT delete it. Wrap it in markdown strikethrough tags like ~~crossed out word~~ so the user can review it.`;
+1. Transcribe exactly. Do not include the word "Question" or "Q" in the text; only extract the numerical value for the 'number' field.
+2. Math: $...$ inline, $$...$$ block. 
+3. Chem: Write chemical formulas strictly as ce{H2O} or ce{Na2SO4}. Do NOT use backslashes or dollar signs for chemistry!
+4. Instructions/Subheadings: type="instruction", no number/marks.
+5. Nested numbers: keep separate from text (e.g. "1(a)").
+6. Diagram present: has_diagram=true and provide box_2d [ymin, xmin, ymax, xmax] scaled 0-1000.
+7. MCQ options in array.
+8. CANCELLATIONS: If a word is crossed out, wrap it in ~~tags~~.`;
 
       const payload = {
         contents: [{
@@ -214,4 +215,33 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
 
   if (onProgress) onProgress("Formatting final exam...");
   return { sections: allSections };
+};
+
+// --- THE SNIPPET ENGINE ---
+// A lightweight, hyper-focused prompt just for extracting formulas
+export const transcribeFormulaSnippet = async (uri: string): Promise<string> => {
+  const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${apiKey}`;
+
+  try {
+    const processedImg = await compressImage(uri);
+    
+    const payload = {
+      contents: [{
+        parts: [
+          { text: "You are a strict math and chemistry transcriber. Read this image and output ONLY the raw LaTeX or \\ce{} code. Do not output JSON. Do not write markdown code blocks like ```latex. Do not write any conversational text. Just the raw string." }, 
+          { inlineData: { mimeType: "image/jpeg", data: processedImg.base64 } }
+        ]
+      }],
+      generationConfig: { temperature: 0.0, maxOutputTokens: 500 } // Keep it super fast and strict
+    };
+
+    const response = await callGeminiWithRetry(url, payload);
+    let rawText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    
+    return rawText.trim();
+  } catch (e) {
+    console.error("Snippet transcription failed:", e);
+    return "";
+  }
 };

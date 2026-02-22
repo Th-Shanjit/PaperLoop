@@ -12,7 +12,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library'; 
-import { transcribeHandwriting } from '../core/services/gemini'; 
+import { transcribeHandwriting, transcribeFormulaSnippet } from '../core/services/gemini'; 
 import { saveProject, getProject, ExamProject, Section, Question } from '../core/services/storage'; 
 import { generateExamHtml } from '../core/services/pdf';
 import { getAppSettings } from '../core/services/storage';
@@ -34,7 +34,7 @@ const HeaderEditor = memo(({ header, onChange }: { header: any, onChange: (h: an
   <View style={styles.headerCard}>
     <TextInput style={styles.schoolInput} value={header.schoolName} onChangeText={t => onChange({...header, schoolName: t})} placeholder="SCHOOL NAME" />
     <TextInput style={styles.titleInput} value={header.title} onChangeText={t => onChange({...header, title: t})} placeholder="EXAM TITLE" />
-    <TextInput style={styles.classInput} value={header.className} onChangeText={t => onChange({...header, className: t})} placeholder="Class (e.g., XII-A)" />
+    <TextInput style={styles.classInput} value={header.className} onChangeText={t => onChange({...header, className: t})} placeholder="Subject / Class (e.g., Physics XII-A)" />
     <View style={styles.metaRow}>
       <View style={styles.metaBox}><Text style={styles.label}>DURATION</Text><TextInput style={styles.metaInput} value={header.duration} onChangeText={t => onChange({...header, duration: t})} /></View>
       <View style={styles.metaBox}><Text style={styles.label}>MARKS</Text><TextInput style={styles.metaInput} value={header.totalMarks} onChangeText={t => onChange({...header, totalMarks: t})} /></View>
@@ -57,6 +57,9 @@ const QuestionCard = memo(({
   isSelectMode: boolean, isSelected: boolean, onToggleSelect: (qId: string) => void
 }) => {
   const [showMoveMenu, setShowMoveMenu] = useState(false);
+  const [showTypeMenu, setShowTypeMenu] = useState(false);
+  const [showSnippetMenu, setShowSnippetMenu] = useState(false);
+  const [isSnipping, setIsSnipping] = useState(false);
   
   const updateOption = (idx: number, text: string) => {
     const newOptions = [...(item.options || ["", "", "", ""])];
@@ -64,12 +67,26 @@ const QuestionCard = memo(({
     onUpdate(sectionId, item.id, 'options', newOptions);
   };
 
-  const cycleType = () => {
-    const types: ('standard' | 'mcq' | 'instruction')[] = ['standard', 'mcq', 'instruction'];
-    const currentIdx = types.indexOf(item.type || 'standard');
-    const nextType = types[(currentIdx + 1) % types.length];
-    onUpdate(sectionId, item.id, 'type', nextType);
+  // Helper to handle the image once it's picked
+  const processSnippet = async (result: ImagePicker.ImagePickerResult) => {
+    if (!result.canceled && result.assets && result.assets[0]) {
+      setIsSnipping(true);
+      try {
+        const formulaText = await transcribeFormulaSnippet(result.assets[0].uri);
+        if (formulaText) {
+          const newText = item.text ? `${item.text} ${formulaText}` : formulaText;
+          onUpdate(sectionId, item.id, 'text', newText);
+        } else {
+          Alert.alert("Failed", "Could not read the formula.");
+        }
+      } catch (e) {
+        Alert.alert("Error", "Failed to process snippet");
+      } finally {
+        setIsSnipping(false);
+      }
+    }
   };
+
 
   const otherSections = allSections.filter(s => s.id !== sectionId);
   const currentSize = item.diagramSize || 'M';
@@ -88,10 +105,24 @@ const QuestionCard = memo(({
               <TextInput style={styles.numInput} value={item.number} onChangeText={t => onUpdate(sectionId, item.id, 'number', t)} placeholder="#" placeholderTextColor="#888" editable={!isSelectMode} />
             </View>
           )}
-          <TouchableOpacity onPress={cycleType} disabled={isSelectMode} style={[styles.typeBadge, item.type === 'mcq' ? styles.typeBadgeMCQ : isInstruction ? styles.typeBadgeInstr : {}]}>
+          {/* THE TRIGGER BADGE */}
+          <TouchableOpacity 
+            onPress={() => setShowTypeMenu(true)} 
+            disabled={isSelectMode} 
+            style={[
+              styles.typeBadge, 
+              item.type === 'mcq' ? styles.typeBadgeMCQ : isInstruction ? styles.typeBadgeInstr : {},
+              { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10 }
+            ]}
+          >
             <Text style={[styles.typeText, (item.type === 'mcq' || isInstruction) && {color:'white'}]}>
               {isInstruction ? 'INSTR' : item.type === 'mcq' ? 'MCQ' : 'TEXT'}
             </Text>
+            <Ionicons 
+              name="chevron-down" 
+              size={12} 
+              color={(item.type === 'mcq' || isInstruction) ? 'white' : '#2563EB'} 
+            />
           </TouchableOpacity>
         </View>
 
@@ -107,14 +138,31 @@ const QuestionCard = memo(({
         )}
       </View>
 
-      <TextInput 
-        style={[styles.qInput, item.hideText && styles.dimmedInput, isInstruction && styles.instructionInput]} 
-        value={item.text} 
-        onChangeText={t => onUpdate(sectionId, item.id, 'text', t)} 
-        multiline 
-        editable={!item.hideText && !isSelectMode} 
-        placeholder={isInstruction ? "Enter subheading or instruction..." : "Question text..."} 
-      />
+      <View style={{ position: 'relative' }}>
+        <TextInput 
+          style={[styles.qInput, item.hideText && styles.dimmedInput, isInstruction && styles.instructionInput, { paddingRight: 40 }]} // Added padding to avoid text hiding under button
+          value={item.text} 
+          onChangeText={t => onUpdate(sectionId, item.id, 'text', t)} 
+          multiline 
+          editable={!item.hideText && !isSelectMode} 
+          placeholder={isInstruction ? "Enter subheading or instruction..." : "Question text..."} 
+        />
+        
+        {/* THE SNIPPET BUTTON */}
+        {!isInstruction && !item.hideText && !isSelectMode && (
+          <TouchableOpacity 
+            style={{ position: 'absolute', right: 10, bottom: 10, backgroundColor: '#EFF6FF', padding: 6, borderRadius: 8 }}
+            onPress={() => setShowSnippetMenu(true)}
+            disabled={isSnipping}
+          >
+            {isSnipping ? (
+              <ActivityIndicator size="small" color="#2563EB" />
+            ) : (
+              <Ionicons name="camera" size={18} color="#2563EB" />
+            )}
+          </TouchableOpacity>
+        )}
+      </View>
       
       {item.type === 'mcq' && !item.hideText && !isInstruction && (
         <View style={styles.mcqContainer}>
@@ -181,6 +229,72 @@ const QuestionCard = memo(({
                 <Ionicons name="arrow-forward" size={14} color="#2563EB" />
               </TouchableOpacity>
             ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* TYPE DROPDOWN MODAL */}
+      <Modal visible={showTypeMenu} transparent animationType="fade">
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setShowTypeMenu(false)} activeOpacity={1}>
+          <View style={styles.dropdownMenu}>
+            <Text style={styles.dropdownTitle}>Select Format</Text>
+            
+            {[
+              { id: 'standard', label: 'Question Box', icon: 'text' },
+              { id: 'mcq', label: 'Multiple Choice (MCQ)', icon: 'list' },
+              { id: 'instruction', label: 'Instruction / Subheading', icon: 'information-circle' }
+            ].map((opt) => (
+              <TouchableOpacity 
+                key={opt.id} 
+                style={[styles.dropdownItem, item.type === opt.id && styles.dropdownItemActive]} 
+                onPress={() => { 
+                  onUpdate(sectionId, item.id, 'type', opt.id); 
+                  setShowTypeMenu(false); 
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Ionicons name={opt.icon as any} size={18} color={item.type === opt.id ? '#2563EB' : '#6B7280'} />
+                  <Text style={[styles.dropdownItemText, item.type === opt.id && styles.dropdownItemTextActive]}>
+                    {opt.label}
+                  </Text>
+                </View>
+                {/* The Checkmark for the currently selected option */}
+                {item.type === opt.id && (
+                  <Ionicons name="checkmark-circle" size={20} color="#2563EB" />
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* SNIPPET IMAGE SOURCE MODAL */}
+      <Modal visible={showSnippetMenu} transparent animationType="fade">
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setShowSnippetMenu(false)} activeOpacity={1}>
+          <View style={styles.dropdownMenu}>
+            <Text style={styles.dropdownTitle}>Add Formula Snippet</Text>
+            
+            <TouchableOpacity style={styles.dropdownItem} onPress={async () => {
+              setShowSnippetMenu(false);
+              const result = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.5, allowsEditing: true });
+              processSnippet(result);
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Ionicons name="camera" size={18} color="#6B7280" />
+                <Text style={styles.dropdownItemText}>Take Photo</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.dropdownItem} onPress={async () => {
+              setShowSnippetMenu(false);
+              const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.5, allowsEditing: true });
+              processSnippet(result);
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Ionicons name="images" size={18} color="#6B7280" />
+                <Text style={styles.dropdownItemText}>Choose from Gallery</Text>
+              </View>
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -253,6 +367,7 @@ export default function EditorScreen() {
   const [fontTheme, setFontTheme] = useState<'modern' | 'classic' | 'typewriter'>('modern');
   const [scanStatus, setScanStatus] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
+  const [scanMenuConfig, setScanMenuConfig] = useState<{ visible: boolean, sectionId: string | null }>({ visible: false, sectionId: null });
   const [showSettings, setShowSettings] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [exportedPdfUri, setExportedPdfUri] = useState<string | null>(null);
@@ -408,8 +523,11 @@ export default function EditorScreen() {
   const handleDownload = async () => {
     if (!exportedPdfUri) return;
     try {
-      const classStr = header.className ? `_${header.className.replace(/[^a-z0-9]/gi, '_')}` : '';
-      const fileName = `${header.title.replace(/[^a-z0-9]/gi, '_')}${classStr}_${Date.now()}.pdf`;
+      // NEW STANDARDIZED NAMING CONVENTION
+      const cleanTitle = (header.title || 'Exam').trim().replace(/[^a-z0-9 \-]/gi, '');
+      const cleanSubject = (header.className || 'Subject').trim().replace(/[^a-z0-9 \-]/gi, '');
+      const dateStr = new Date().toISOString().split('T')[0]; // Creates YYYY-MM-DD
+      const fileName = `${cleanSubject} - ${cleanTitle} - ${dateStr}.pdf`;
       
       // Save to app folder first
       const docDir = FileSystem.documentDirectory + 'exams/';
@@ -446,8 +564,11 @@ export default function EditorScreen() {
   const handleShare = async () => {
     if (!exportedPdfUri) return;
     try {
-      const classStr = header.className ? `_${header.className.replace(/[^a-z0-9]/gi, '_')}` : '';
-      const fileName = `${header.title.replace(/[^a-z0-9]/gi, '_')}${classStr}_${Date.now()}.pdf`;
+      // NEW STANDARDIZED NAMING CONVENTION
+      const cleanTitle = (header.title || 'Exam').trim().replace(/[^a-z0-9 \-]/gi, '');
+      const cleanSubject = (header.className || 'Subject').trim().replace(/[^a-z0-9 \-]/gi, '');
+      const dateStr = new Date().toISOString().split('T')[0]; 
+      const fileName = `${cleanSubject} - ${cleanTitle} - ${dateStr}.pdf`;
       
       // Save to app folder
       const docDir = FileSystem.documentDirectory + 'exams/';
@@ -524,23 +645,30 @@ export default function EditorScreen() {
     }
   };
 
-  const handleScanToSection = async (secId: string) => {
-    try {
-      const result = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
-      if (!result.canceled && result.assets[0]) {
+  // Helper to process the full page scan
+  const processPageScan = async (secId: string, result: ImagePicker.ImagePickerResult) => {
+    if (!result.canceled && result.assets && result.assets[0]) {
+      try {
+        setScanStatus('Warming up AI engine...');
         const geminiResult = await transcribeHandwriting(
           [{ uri: result.assets[0].uri }],
-          (statusMsg) => setScanStatus(statusMsg)
+          (statusMsg) => setScanStatus(statusMsg) 
         );
         let newQuestions: Question[] = [];
-        if (geminiResult.sections) geminiResult.sections.forEach((s: any) => { newQuestions.push(...s.questions); });
+        if (geminiResult.sections) {
+          geminiResult.sections.forEach((s: any) => { newQuestions.push(...s.questions); });
+        }
         setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, ...newQuestions] } : s));
+      } catch (e) { 
+        Alert.alert("Error", "Scan failed"); 
+      } finally { 
+        setScanStatus(''); 
       }
-    } catch (e) {
-      Alert.alert("Error", "Scan failed");
-    } finally {
-      setScanStatus('');
     }
+  };
+
+  const handleScanToSection = (secId: string) => {
+    setScanMenuConfig({ visible: true, sectionId: secId });
   };
   const handleHome = () => {
     router.back(); 
@@ -736,6 +864,43 @@ export default function EditorScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* SCAN IMAGE SOURCE MODAL */}
+      <Modal visible={scanMenuConfig.visible} transparent animationType="fade">
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setScanMenuConfig({ visible: false, sectionId: null })} activeOpacity={1}>
+          <View style={styles.dropdownMenu}>
+            <Text style={styles.dropdownTitle}>Scan New Page</Text>
+            
+            <TouchableOpacity style={styles.dropdownItem} onPress={async () => {
+              const secId = scanMenuConfig.sectionId;
+              setScanMenuConfig({ visible: false, sectionId: null });
+              if (secId) {
+                const result = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
+                processPageScan(secId, result);
+              }
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Ionicons name="camera" size={18} color="#6B7280" />
+                <Text style={styles.dropdownItemText}>Camera</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.dropdownItem} onPress={async () => {
+              const secId = scanMenuConfig.sectionId;
+              setScanMenuConfig({ visible: false, sectionId: null });
+              if (secId) {
+                const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
+                processPageScan(secId, result);
+              }
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Ionicons name="images" size={18} color="#6B7280" />
+                <Text style={styles.dropdownItemText}>Gallery</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -840,6 +1005,14 @@ const styles = StyleSheet.create({
   menuTitle: { fontSize: 11, fontWeight: '700', color: '#999', padding: 8, textTransform: 'uppercase' },
   menuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 12, borderRadius: 8 },
   menuText: { fontSize: 14, color: '#111' },
+  
+  // --- Dropdown Menu Styles ---
+  dropdownMenu: { backgroundColor: '#fff', borderRadius: 16, padding: 16, width: 280, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 10 },
+  dropdownTitle: { fontSize: 13, fontWeight: '700', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12, paddingHorizontal: 8 },
+  dropdownItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 12, borderRadius: 10, marginBottom: 4 },
+  dropdownItemActive: { backgroundColor: '#EFF6FF' },
+  dropdownItemText: { fontSize: 15, fontWeight: '500', color: '#374151' },
+  dropdownItemTextActive: { color: '#2563EB', fontWeight: '700' },
   
   // Export Modal
   exportModal: { width: '85%', backgroundColor: 'white', borderRadius: 20, padding: 24, alignItems: 'center' },
