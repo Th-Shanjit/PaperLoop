@@ -61,6 +61,27 @@ const QuestionCard = memo(({
   const [showSnippetMenu, setShowSnippetMenu] = useState(false);
   const [isSnipping, setIsSnipping] = useState(false);
   
+  // NEW: Track the cursor position!
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+
+  // NEW: The formatting injector
+  const applyFormatting = (prefix: string, suffix: string, defaultText: string = '') => {
+    const currentText = item.text || '';
+    const { start, end } = selection;
+    
+    let newText = '';
+    if (start !== end) {
+      // If the user highlighted a word, wrap it!
+      const selectedText = currentText.substring(start, end);
+      newText = currentText.substring(0, start) + prefix + selectedText + suffix + currentText.substring(end);
+    } else {
+      // If no word is highlighted, insert at the blinking cursor!
+      newText = currentText.substring(0, start) + prefix + defaultText + suffix + currentText.substring(start);
+    }
+    
+    onUpdate(sectionId, item.id, 'text', newText);
+  };  
+
   const updateOption = (idx: number, text: string) => {
     const newOptions = [...(item.options || ["", "", "", ""])];
     newOptions[idx] = text;
@@ -140,29 +161,46 @@ const QuestionCard = memo(({
 
       <View style={{ position: 'relative' }}>
         <TextInput 
-          style={[styles.qInput, item.hideText && styles.dimmedInput, isInstruction && styles.instructionInput, { paddingRight: 40 }]} // Added padding to avoid text hiding under button
+          style={[styles.qInput, item.hideText && styles.dimmedInput, isInstruction && styles.instructionInput, { paddingRight: 40 }]} 
           value={item.text} 
           onChangeText={t => onUpdate(sectionId, item.id, 'text', t)} 
+          onSelectionChange={(e) => setSelection(e.nativeEvent.selection)} // Tracks the cursor!
           multiline 
           editable={!item.hideText && !isSelectMode} 
           placeholder={isInstruction ? "Enter subheading or instruction..." : "Question text..."} 
         />
         
-        {/* THE SNIPPET BUTTON */}
+        {/* THE SNIPPET BUTTON (Moved to top-right so it stays out of the way) */}
         {!isInstruction && !item.hideText && !isSelectMode && (
           <TouchableOpacity 
-            style={{ position: 'absolute', right: 10, bottom: 10, backgroundColor: '#EFF6FF', padding: 6, borderRadius: 8 }}
+            style={{ position: 'absolute', right: 5, top: 5, backgroundColor: '#EFF6FF', padding: 6, borderRadius: 8 }}
             onPress={() => setShowSnippetMenu(true)}
             disabled={isSnipping}
           >
-            {isSnipping ? (
-              <ActivityIndicator size="small" color="#2563EB" />
-            ) : (
-              <Ionicons name="camera" size={18} color="#2563EB" />
-            )}
+            {isSnipping ? <ActivityIndicator size="small" color="#2563EB" /> : <Ionicons name="camera" size={18} color="#2563EB" />}
           </TouchableOpacity>
         )}
       </View>
+
+      {/* THE QUICK FORMAT TOOLBAR */}
+      {!item.hideText && !isSelectMode && (
+        <View style={styles.formatToolbar}>
+          <TouchableOpacity style={styles.formatBtn} onPress={() => applyFormatting('**', '**', 'bold')}>
+            <Text style={[styles.formatBtnText, {fontWeight: 'bold'}]}>B</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.formatBtn} onPress={() => applyFormatting('*', '*', 'italic')}>
+            <Text style={[styles.formatBtnText, {fontStyle: 'italic'}]}>I</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.formatBtn} onPress={() => applyFormatting('_______________', '')}>
+            <Text style={styles.formatBtnText}>___</Text>
+          </TouchableOpacity>
+          {!isInstruction && (
+            <TouchableOpacity style={styles.formatBtn} onPress={() => applyFormatting('$\\ce{', '}$', 'H2O')}>
+              <Text style={styles.formatBtnText}>\ce{ }</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
       
       {item.type === 'mcq' && !item.hideText && !isInstruction && (
         <View style={styles.mcqContainer}>
@@ -412,14 +450,17 @@ export default function EditorScreen() {
             text: "Save & Exit", 
             isPreferred: true,
             onPress: async () => {
-              // Grab the latest data from the ref
               const { sections: s, header: h, fontTheme: f, currentProjectId: id } = latestState.current;
+              
+              // CHANGE THIS BLOCK:
               const project = {
                 id: id, title: h.title, updatedAt: Date.now(),
-                header: h, sections: s, settings: { fontTheme: (f === 'typewriter' ? 'modern' : f) as 'modern' | 'classic' }
+                header: h, sections: s, 
+                settings: { fontTheme: f } // <-- REMOVED the old 'typewriter' hack
               };
-              await saveProject(project); // Auto-save!
-              navigation.dispatch(e.data.action); // Then let them leave
+              
+              await saveProject(project as any); // Added 'as any' to bypass strict Storage types for now
+              navigation.dispatch(e.data.action);
             }
           }
         ]
@@ -438,7 +479,7 @@ export default function EditorScreen() {
         const saved = await getProject(projectId);
         if (saved) {
           setHeader(saved.header);
-          setFontTheme(saved.settings?.fontTheme as any || 'modern');
+          setFontTheme(saved.settings?.fontTheme as any || 'calibri');
           if (saved.sections && saved.sections.length > 0) {
             setSections(saved.sections);
           } else if (saved.questions && saved.questions.length > 0) {
@@ -458,7 +499,7 @@ export default function EditorScreen() {
           instructions: appDefaults.defaultInstructions
         };
         setHeader(newHeader);
-        setFontTheme(appDefaults.defaultFontTheme);
+        setFontTheme((appDefaults.defaultFontTheme as any) || 'calibri');
 
         try {
           const parsed = JSON.parse(initialData);
@@ -1166,4 +1207,9 @@ const styles = StyleSheet.create({
   bulkActionText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
   bulkActionBtn: { backgroundColor: '#2563EB', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
   bulkActionBtnText: { color: 'white', fontWeight: '700', fontSize: 13 },
+
+  // --- Quick Format Toolbar ---
+  formatToolbar: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 4, paddingHorizontal: 2 },
+  formatBtn: { backgroundColor: '#F9FAFB', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 6, borderWidth: 1, borderColor: '#E5E7EB' },
+  formatBtnText: { color: '#4B5563', fontSize: 13, fontWeight: '700' },
 });

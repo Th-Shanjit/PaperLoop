@@ -43,7 +43,7 @@ export interface ExamProject {
   sections: Section[]; 
   questions?: Question[]; 
   settings: {
-    fontTheme: 'modern' | 'classic';
+    fontTheme: string;
   };
 }
 
@@ -134,7 +134,7 @@ export interface AppSettings {
   organizationLogo?: string;
   defaultDuration: string;
   defaultInstructions: string;
-  defaultFontTheme: 'modern' | 'classic' | 'typewriter';
+  defaultFontTheme: string;
   proLicenseKey?: string;
 }
 
@@ -144,7 +144,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   organizationName: "PaperLoop Academy",
   defaultDuration: "90 Mins",
   defaultInstructions: "1. All questions are compulsory.\n2. Draw diagrams where necessary.",
-  defaultFontTheme: 'modern'
+  defaultFontTheme: 'calibri'
 };
 
 export const getAppSettings = async (): Promise<AppSettings> => {

@@ -215,7 +215,7 @@ const processImages = async (sections: Section[]) => {
 export const generateExamHtml = async (
   header: ExamHeader,
   sections: Section[],
-  fontTheme: 'modern' | 'classic' | 'typewriter'
+  fontTheme: 'inter' | 'times' | 'bookman' | 'calibri' | 'arial' | 'garamond' | string
 ) => {
   // Replace your existing formatter with this:
   const formatRichText = (text: string) => {
