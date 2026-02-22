@@ -11,6 +11,7 @@ interface ScannedPage {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// --- 1. IMAGE COMPRESSION ---
 const compressImage = async (uri: string): Promise<{ base64: string, width: number, height: number, uri: string }> => {
   try {
     const result = await ImageManipulator.manipulateAsync(
@@ -31,6 +32,7 @@ const cleanText = (text: string): string => {
   return cleaned.trim(); 
 };
 
+// --- 2. BRUTAL RESCUE JSON PARSER ---
 const parseJSONSafely = (rawText: string) => {
   let cleaned = rawText.replace(/^```(?:json)?\n?/im, '').replace(/\n?```$/im, '').trim();
   try {
@@ -38,21 +40,14 @@ const parseJSONSafely = (rawText: string) => {
   } catch (err) {
     console.warn("JSON Parse failed! Activating Brutal Rescue...");
     
-    // THE BRUTAL RESCUE ALGORITHM:
-    // If the AI cuts off mid-sentence (e.g. at Question 4), this rewinds the text 
-    // to the last complete '}' bracket (saving Questions 1-3), drops the broken data, 
-    // and forces the arrays closed.
-    
     const lastCompleteObjectIdx = cleaned.lastIndexOf('}');
     if (lastCompleteObjectIdx !== -1) {
       let patched = cleaned.substring(0, lastCompleteObjectIdx + 1);
       
-      // Depending on where it cut off, it needs different closing tags. 
-      // We try the 4 most likely structural closures for our specific schema.
       const closingCombinations = [
-        patched + ']}',       // Closes questions array, section object
-        patched + ']}]}',     // Closes questions array, section object, sections array, root object
-        patched + '}]}',      // Closes section object, sections array, root object
+        patched + ']}',       
+        patched + ']}]}',     
+        patched + '}]}',      
         patched + '}]}]}'     
       ];
 
@@ -69,6 +64,26 @@ const parseJSONSafely = (rawText: string) => {
   }
 };
 
+// --- 3. RATE LIMIT ARMOR (Exponential Backoff) ---
+const callGeminiWithRetry = async (url: string, payload: any, maxRetries = 3) => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await axios.post(url, payload);
+      return response;
+    } catch (error: any) {
+      const status = error.response?.status;
+      if ((status === 503 || status === 429) && attempt < maxRetries - 1) {
+        const backoffTime = (2 ** attempt) * 1500;
+        console.warn(`[API] ${status} caught. Retrying in ${backoffTime}ms...`);
+        await sleep(backoffTime);
+        continue;
+      }
+      throw error;
+    }
+  }
+};
+
+// --- 4. MAIN SCANNING ENGINE (Staggered Parallel) ---
 export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (msg: string) => void) => {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${apiKey}`;
@@ -98,13 +113,9 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
                     type: "ARRAY",
                     description: "If diagram exists, return [ymin, xmin, ymax, xmax] scaled 0-1000.",
                     items: { type: "INTEGER" }
-                  },
-                  page_index: { 
-                    type: "INTEGER",
-                    description: "The 0-based index of the image this question was found on."
                   }
                 },
-                required: ["number", "text", "marks", "type", "page_index"]
+                required: ["number", "text", "marks", "type"]
               }
             }
           },
@@ -115,110 +126,97 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
     required: ["sections"]
   };
 
-  let allSections: any[] = [];
-  const CHUNK_SIZE = 3; // THE GOLDILOCKS FIX: 3 pages per API call
+  const masterPrompt = `Strict OCR. Rules:
+1. Transcribe exactly.
+2. Math: $...$ inline, $$...$$ block. 
+3. Chem: Write chemical formulas strictly as ce{H2O}. NO backslashes!
+4. Instructions/Subheadings: type="instruction", no number/marks.
+5. SERIALIZATION: DO NOT combine parent numbers with sub-numbers. If a question is '2' and its sub-question is '(i)', the number field should ONLY be '(i)'. NEVER output '2(i)'.
+6. Diagram present: has_diagram=true and provide box_2d [ymin, xmin, ymax, xmax] scaled 0-1000.
+7. MCQ options in array.
+8. CANCELLATIONS: Wrap crossed out words in ~~tags~~.`;
 
-  for (let i = 0; i < pages.length; i += CHUNK_SIZE) {
-    const chunk = pages.slice(i, i + CHUNK_SIZE);
-    const isLastChunk = (i + CHUNK_SIZE) >= pages.length;
+  if (onProgress) onProgress(`Starting high-speed scan of ${pages.length} pages...`);
+
+  // Fire all pages at once, staggered by 1.2 seconds to bypass 503 limits
+  const scanPromises = pages.map(async (page, index) => {
     
-    if (onProgress) {
-      onProgress(`Optimizing pages ${i + 1} to ${Math.min(i + CHUNK_SIZE, pages.length)} of ${pages.length}...`);
+    if (index > 0) {
+      await sleep(index * 1200); 
     }
 
     try {
-      // 1. Compress just this chunk
-      const imageParts = await Promise.all(chunk.map(async (page) => {
-        const processedImg = await compressImage(page.uri);
-        return { inlineData: { mimeType: "image/jpeg", data: processedImg.base64 } };
-      }));
-
-      // 2. Instruct the AI on this specific chunk
-      const masterPrompt = `Strict OCR. Rules:
-1. Transcribe exactly. Do not include the word "Question" or "Q" in the text; only extract the numerical value for the 'number' field.
-2. Math: $...$ inline, $$...$$ block. 
-3. Chem: Write chemical formulas strictly as ce{H2O} or ce{Na2SO4}. Do NOT use backslashes or dollar signs for chemistry!
-4. Instructions/Subheadings: type="instruction", no number/marks.
-5. Nested numbers: keep separate from text (e.g. "1(a)").
-6. Diagram present: has_diagram=true and provide box_2d [ymin, xmin, ymax, xmax] scaled 0-1000.
-7. MCQ options in array.
-8. CANCELLATIONS: If a word is crossed out, wrap it in ~~tags~~.`;
-
+      const processedImg = await compressImage(page.uri);
+      
       const payload = {
         contents: [{
-          parts: [ { text: masterPrompt }, ...imageParts ]
+          parts: [ 
+            { text: masterPrompt }, 
+            { inlineData: { mimeType: "image/jpeg", data: processedImg.base64 } } 
+          ]
         }],
         generationConfig: {
           responseMimeType: "application/json",
           responseSchema: responseSchema,
-          temperature: 0.1, // Bumped slightly to 0.1 to prevent hallucination loops in Preview models
-          maxOutputTokens: 8192
+          temperature: 0.1, 
+          maxOutputTokens: 4096 
         }
       };
 
-      // 3. Rate Limit Protection: Wait 2 seconds between chunks to avoid 503 errors
-      if (i > 0) {
-        if (onProgress) onProgress(`Cooling down API to prevent rate limits...`);
-        await sleep(2500); 
-      }
-
-      if (onProgress) onProgress(`AI reading pages ${i + 1}-${Math.min(i + CHUNK_SIZE, pages.length)}...`);
-      const response = await axios.post(url, payload);
-
+      const response = await callGeminiWithRetry(url, payload);
       let rawText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
       const data = parseJSONSafely(rawText);
       
-      // 4. Map the AI's local chunk index back to the absolute real-world page index
-      if (data.sections) {
-        data.sections.forEach((sec: any) => {
-          const processedQs = sec.questions.map((q: any) => {
-            const localIndex = (q.page_index !== undefined && q.page_index < chunk.length) ? q.page_index : 0;
-            const absoluteIndex = i + localIndex; // Converts chunk index '0' to real page '3'
-            
-            return {
-              id: Date.now().toString() + Math.random(),
-              number: q.number || "",
-              text: cleanText(q.text), 
-              marks: q.marks || "",
-              type: q.type || 'standard', 
-              options: q.options || [],
-              has_diagram: q.has_diagram, 
-              box_2d: q.box_2d,           
-              pageUri: pages[absoluteIndex].uri, // Matches back to correct file for the Cropper
-              diagramUri: q.has_diagram ? "NEEDS_CROP" : undefined, 
-              hideText: false, 
-              isFullWidth: false
-            };
+      let sections = data.sections || [];
+      
+      // Attach the correct UI data
+      sections.forEach((sec: any) => {
+        if (sec.questions) {
+          sec.questions.forEach((q: any) => {
+            q.pageUri = page.uri; 
+            q.id = Date.now().toString() + Math.random();
+            q.number = q.number || "";
+            q.text = cleanText(q.text);
+            q.marks = q.marks || "";
+            q.type = q.type || 'standard';
+            q.options = q.options || [];
+            q.diagramUri = q.has_diagram ? "NEEDS_CROP" : undefined;
+            q.hideText = false;
+            q.isFullWidth = false;
           });
+        }
+      });
 
-          allSections.push({
-            id: Date.now().toString() + Math.random(),
-            title: sec.title || "Section",
-            layout: sec.layout_hint || "1-column",
-            questions: processedQs
-          });
-        });
-      }
-        
+      if (onProgress && pages.length > 1) onProgress(`Page ${index + 1} processed...`);
+      return sections;
+
     } catch (e: any) {
-      console.error(`Chunk starting at page ${i + 1} Failed:`, e.message);
-      allSections.push({
+      console.error(`Page ${index + 1} Failed:`, e.message);
+      return [{
         id: Date.now().toString() + Math.random(),
-        title: `⚠️ Pages ${i + 1}-${Math.min(i + CHUNK_SIZE, pages.length)} Failed`,
+        title: `⚠️ Page ${index + 1} Failed`,
         layout: '1-column',
         questions: [{
-          id: Date.now().toString(), number: "!", text: "Scan failed for these pages. Try scanning them individually.", marks: "", type: "standard", hideText: false
+          id: Date.now().toString(), number: "!", text: "Scan failed. Try scanning individually.", marks: "", type: "standard", hideText: false
         }]
-      });
+      }];
     }
-  }
+  });
+
+  // Wait for all staggered requests to finish
+  const allResults = await Promise.all(scanPromises);
 
   if (onProgress) onProgress("Formatting final exam...");
+  
+  let allSections: any[] = [];
+  allResults.forEach((pageSections) => {
+    allSections.push(...pageSections);
+  });
+
   return { sections: allSections };
 };
 
-// --- THE SNIPPET ENGINE ---
-// A lightweight, hyper-focused prompt just for extracting formulas
+// --- 5. THE SNIPPET ENGINE ---
 export const transcribeFormulaSnippet = async (uri: string): Promise<string> => {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${apiKey}`;
@@ -229,11 +227,11 @@ export const transcribeFormulaSnippet = async (uri: string): Promise<string> => 
     const payload = {
       contents: [{
         parts: [
-          { text: "You are a strict math and chemistry transcriber. Read this image and output ONLY the raw LaTeX or \\ce{} code. Do not output JSON. Do not write markdown code blocks like ```latex. Do not write any conversational text. Just the raw string." }, 
+          { text: "Output ONLY raw LaTeX or \\ce{} code. NO JSON." }, 
           { inlineData: { mimeType: "image/jpeg", data: processedImg.base64 } }
         ]
       }],
-      generationConfig: { temperature: 0.0, maxOutputTokens: 500 } // Keep it super fast and strict
+      generationConfig: { temperature: 0.0, maxOutputTokens: 500 }
     };
 
     const response = await callGeminiWithRetry(url, payload);

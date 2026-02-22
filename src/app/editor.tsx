@@ -364,7 +364,8 @@ export default function EditorScreen() {
     duration: "", totalMarks: "50", instructions: ""
   });
   const [sections, setSections] = useState<Section[]>([]);
-  const [fontTheme, setFontTheme] = useState<'modern' | 'classic' | 'typewriter'>('modern');
+  // Change from the old 3 fonts to the new ones
+  const [fontTheme, setFontTheme] = useState<'inter' | 'times' | 'bookman' | 'calibri' | 'arial' | 'garamond'>('calibri');
   const [scanStatus, setScanStatus] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
   const [scanMenuConfig, setScanMenuConfig] = useState<{ visible: boolean, sectionId: string | null }>({ visible: false, sectionId: null });
@@ -861,14 +862,21 @@ export default function EditorScreen() {
         </View>
       )}
 
-      <Modal visible={showSettings} transparent animationType="fade">
+<Modal visible={showSettings} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} onPress={() => setShowSettings(false)} activeOpacity={1}>
            <View style={styles.menu}>
               <Text style={styles.menuTitle}>Font Theme</Text>
-              {['modern', 'classic', 'typewriter'].map((f) => (
-                <TouchableOpacity key={f} style={styles.menuItem} onPress={() => { setFontTheme(f as any); setShowSettings(false); }}>
-                  <Text style={styles.menuText}>{f.toUpperCase()}</Text>
-                  {fontTheme === f && <Ionicons name="checkmark" size={18} color="#2563EB"/>}
+              {[
+                { id: 'calibri', label: 'Calibri (Modern)' },
+                { id: 'times', label: 'Times New Roman' },
+                { id: 'bookman', label: 'Bookman Old Style' },
+                { id: 'arial', label: 'Arial' },
+                { id: 'garamond', label: 'Garamond (Classic)' },
+                { id: 'inter', label: 'Inter (Clean)' }
+              ].map((f) => (
+                <TouchableOpacity key={f.id} style={styles.menuItem} onPress={() => { setFontTheme(f.id as any); setShowSettings(false); }}>
+                  <Text style={styles.menuText}>{f.label}</Text>
+                  {fontTheme === f.id && <Ionicons name="checkmark" size={18} color="#2563EB"/>}
                 </TouchableOpacity>
               ))}
            </View>

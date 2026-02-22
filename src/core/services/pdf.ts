@@ -236,10 +236,17 @@ export const generateExamHtml = async (
 
   const processedSections = await processImages(sections);
 
-  const fontImport = fontTheme === 'classic'
-    ? "@import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@300;700&display=swap'); body { font-family: 'Merriweather', serif; }"
-    : fontTheme === 'typewriter'
-    ? "@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap'); body { font-family: 'Courier Prime', monospace; }"
+  const fontImport = 
+    fontTheme === 'times' 
+    ? "body { font-family: 'Times New Roman', Times, serif; }"
+    : fontTheme === 'bookman'
+    ? "body { font-family: 'Bookman Old Style', Bookman, 'URW Bookman L', 'Palatino Linotype', serif; }"
+    : fontTheme === 'calibri'
+    ? "body { font-family: Calibri, 'Segoe UI', Arial, sans-serif; }"
+    : fontTheme === 'arial'
+    ? "body { font-family: Arial, Helvetica, sans-serif; }"
+    : fontTheme === 'garamond'
+    ? "body { font-family: Garamond, 'EB Garamond', serif; }"
     : "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'); body { font-family: 'Inter', sans-serif; }";
 
   const getColumnCount = (layout: string) => {
