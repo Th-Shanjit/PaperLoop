@@ -10,6 +10,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import { getSessionPages, removePageFromSession, updatePageInSession, swapPagesInSession, clearSession, ScannedPage, currentSessionPages } from '../core/store/session';
 import { transcribeHandwriting } from '../core/services/gemini';
+import { deductScanToken } from '../core/services/storage';
 
 export default function WorkspaceScreen() {
   const router = useRouter();
@@ -79,121 +80,134 @@ export default function WorkspaceScreen() {
   const handleAnalyze = async () => {
     if (pages.length === 0) return;
     setIsAnalyzing(true);
-    setScanStatus('Warming up AI engine...'); // Trigger the overlay
+    setScanStatus('Warming up AI engine...'); 
     
     try {
-      // Pass the callback here!
       const result = await transcribeHandwriting(pages, (msg) => setScanStatus(msg));
       
-      // Process diagrams for cropping (works for both sections and questions)
-      const processDiagramCrop = async (q: any, qIndex: number) => {
-        let finalQ = { ...q };
-        if (q.has_diagram && q.box_2d && q.pageUri) {
-          try {
-            setScanStatus(`Cropping diagram ${qIndex + 1}...`); // Feed diagram cropping status too!
-            console.log(`🔍 Cropping diagram for Q${qIndex + 1}, box_2d:`, q.box_2d, "from:", q.pageUri);
+      // 1. Count the total questions found across all scanned pages
+      let totalQuestions = 0;
+      if (result.sections) {
+        result.sections.forEach((s: any) => totalQuestions += (s.questions?.length || 0));
+      } else if (result.questions) {
+        totalQuestions = result.questions.length;
+      }
 
-            const { width: imgW, height: imgH } = await new Promise((resolve) => {
-                 Image.getSize(q.pageUri, (w, h) => resolve({width: w, height: h}), () => resolve({width: 1000, height: 1000}));
-            }) as any;
+      // --- THE CORE PROCESSING LOGIC ---
+      const finishProcessing = async () => {
+        try {
+          // CHARGE THE TOLL: Deduct 1 token for each successful page in the batch
+          for (let i = 0; i < pages.length; i++) {
+            await deductScanToken();
+          }
 
-            console.log(`📐 Image dimensions: ${imgW}x${imgH}`);
+          const processDiagramCrop = async (q: any, qIndex: number) => {
+            let finalQ = { ...q };
+            if (q.has_diagram && q.box_2d && q.pageUri) {
+              try {
+                setScanStatus(`Cropping diagram ${qIndex + 1}...`); 
+                const { width: imgW, height: imgH } = await new Promise((resolve) => {
+                     Image.getSize(q.pageUri, (w, h) => resolve({width: w, height: h}), () => resolve({width: 1000, height: 1000}));
+                }) as any;
 
-            const [ymin, xmin, ymax, xmax] = q.box_2d;
-            
-            // --- HYBRID PADDING STRATEGY ---
-            const paddingX = Math.max(imgW * 0.05, 50);
-            const paddingY = Math.max(imgH * 0.05, 50);
+                const [ymin, xmin, ymax, xmax] = q.box_2d;
+                const paddingX = Math.max(imgW * 0.05, 50);
+                const paddingY = Math.max(imgH * 0.05, 50);
 
-            const finalX = Math.max(0, (xmin / 1000) * imgW - paddingX);
-            const finalY = Math.max(0, (ymin / 1000) * imgH - paddingY);
-            const boxW = ((xmax - xmin) / 1000) * imgW;
-            const finalW = Math.min(imgW - finalX, boxW + (paddingX * 2));
-            const boxH = ((ymax - ymin) / 1000) * imgH;
-            const finalH = Math.min(imgH - finalY, boxH + (paddingY * 2));
+                const finalX = Math.max(0, (xmin / 1000) * imgW - paddingX);
+                const finalY = Math.max(0, (ymin / 1000) * imgH - paddingY);
+                const boxW = ((xmax - xmin) / 1000) * imgW;
+                const finalW = Math.min(imgW - finalX, boxW + (paddingX * 2));
+                const boxH = ((ymax - ymin) / 1000) * imgH;
+                const finalH = Math.min(imgH - finalY, boxH + (paddingY * 2));
 
-            // Validate crop dimensions
-            if (finalW <= 0 || finalH <= 0) {
-              console.error(`❌ Invalid crop dimensions: ${finalW}x${finalH}`);
-              return finalQ;
+                if (finalW > 0 && finalH > 0) {
+                  const cropConfig = { originX: finalX, originY: finalY, width: finalW, height: finalH };
+                  const cropResult = await ImageManipulator.manipulateAsync(
+                    q.pageUri, [{ crop: cropConfig }], { compress: 1, format: ImageManipulator.SaveFormat.PNG }
+                  );
+                  const diagDir = FileSystem.documentDirectory + 'diagrams/';
+                  const dirInfo = await FileSystem.getInfoAsync(diagDir);
+                  if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(diagDir, { intermediates: true });
+                  
+                  const permanentUri = diagDir + `diagram_${Date.now()}_${qIndex}.png`;
+                  await FileSystem.copyAsync({ from: cropResult.uri, to: permanentUri });
+                  finalQ.diagramUri = permanentUri;
+                }
+              } catch (e) { console.error("❌ Crop Failed for Q" + (qIndex + 1), e); }
             }
+            return finalQ;
+          };
 
-            const cropConfig = { originX: finalX, originY: finalY, width: finalW, height: finalH };
-            console.log(`✂️ Crop config:`, cropConfig);
-
-            const cropResult = await ImageManipulator.manipulateAsync(
-              q.pageUri,
-              [{ crop: cropConfig }],
-              { compress: 1, format: ImageManipulator.SaveFormat.PNG }
-            );
-
-            // Save to permanent location so it survives until PDF export
-            const diagDir = FileSystem.documentDirectory + 'diagrams/';
-            const dirInfo = await FileSystem.getInfoAsync(diagDir);
-            if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(diagDir, { intermediates: true });
-            
-            const permanentUri = diagDir + `diagram_${Date.now()}_${qIndex}.png`;
-            await FileSystem.copyAsync({ from: cropResult.uri, to: permanentUri });
-            
-            finalQ.diagramUri = permanentUri;
-            console.log(`✅ Diagram saved: ${permanentUri}`);
-          } catch (e) { console.error("❌ Crop Failed for Q" + (qIndex + 1), e); }
-        } else if (q.has_diagram && !q.box_2d) {
-          console.warn(`⚠️ Q${qIndex + 1} has_diagram=true but NO box_2d returned by Gemini`);
+          if (result.sections && result.sections.length > 0) {
+            const processedSections = [];
+            let globalQIndex = 0;
+            for (const section of result.sections) {
+              const processedQuestions = [];
+              for (const q of section.questions) {
+                const processed = await processDiagramCrop(q, globalQIndex);
+                processedQuestions.push(processed);
+                globalQIndex++;
+              }
+              processedSections.push({ ...section, questions: processedQuestions });
+            }
+            router.push({ pathname: "/editor", params: { initialData: JSON.stringify(processedSections), isSectionData: "true" } });
+          } else if (result.questions) {
+            const processedQuestions = [];
+            for (let i = 0; i < result.questions.length; i++) {
+              const processed = await processDiagramCrop(result.questions[i], i);
+              processedQuestions.push(processed);
+            }
+            router.push({ pathname: "/editor", params: { initialData: JSON.stringify(processedQuestions) } });
+          } else {
+            Alert.alert("Error", "No questions detected.");
+          }
+        } catch (e) {
+          Alert.alert("Analysis Failed", "Please try again.");
+          console.error(e);
+        } finally {
+          setIsAnalyzing(false);
+          setScanStatus(''); 
         }
-        return finalQ;
       };
 
-      // Check if we have sections (new format) or questions (old format)
-      if (result.sections && result.sections.length > 0) {
-        // NEW FORMAT: Process sections
-        const processedSections = [];
-        let globalQIndex = 0;
-        for (const section of result.sections) {
-          const processedQuestions = [];
-          for (const q of section.questions) {
-            const processed = await processDiagramCrop(q, globalQIndex);
-            processedQuestions.push(processed);
-            globalQIndex++;
-          }
-          processedSections.push({
-            ...section,
-            questions: processedQuestions
-          });
-        }
+      // --- THE FAIRNESS RULES ---
 
-        console.log(`📋 Processed ${globalQIndex} questions across ${processedSections.length} sections`);
-
-        // PASS SECTIONS to Editor
-        router.push({
-          pathname: "/editor",
-          params: { 
-            initialData: JSON.stringify(processedSections),
-            isSectionData: "true"
-          }
-        });
-      } else if (result.questions) {
-        // OLD FORMAT: Process flat questions list
-        const processedQuestions = [];
-        for (let i = 0; i < result.questions.length; i++) {
-          const processed = await processDiagramCrop(result.questions[i], i);
-          processedQuestions.push(processed);
-        }
-
-        router.push({
-          pathname: "/editor",
-          params: { initialData: JSON.stringify(processedQuestions) }
-        });
-      } else {
-        Alert.alert("Error", "No questions detected.");
+      // Rule 1: Zero Questions Found (Total Failure)
+      if (totalQuestions === 0) {
+        Alert.alert("Scan Failed", "We couldn't detect any questions on these pages. Please try taking brighter photos.\n\n(No scan tokens were deducted).");
+        setIsAnalyzing(false);
+        setScanStatus('');
+        return;
       }
+
+      // Rule 2: Low Yield (<= 2 questions)
+      if (totalQuestions <= 2) {
+        Alert.alert(
+          "Low Questions Detected", 
+          `We only found ${totalQuestions} question(s) across ${pages.length} page(s). Do you want to keep this (Costs ${pages.length} Token(s)) or discard and try again (Free)?`,
+          [
+            { text: "Discard (Free)", style: "cancel", onPress: () => {
+                setIsAnalyzing(false);
+                setScanStatus('');
+            }},
+            { text: `Keep (-${pages.length} Tokens)`, onPress: () => {
+                setScanStatus('Finalizing...');
+                finishProcessing();
+            }}
+          ]
+        );
+        return;
+      }
+
+      // Rule 3: Success! Run the processing and charge the tokens.
+      await finishProcessing();
 
     } catch (e) {
       Alert.alert("Analysis Failed", "Please try again.");
       console.error(e);
-    } finally {
       setIsAnalyzing(false);
-      setScanStatus(''); // Close the overlay
+      setScanStatus('');
     }
   };
 
