@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { 
-  View, Text, TouchableOpacity, StyleSheet, StatusBar, FlatList, Alert, RefreshControl, Modal, ActivityIndicator 
+  View, Text, TouchableOpacity, StyleSheet, StatusBar, FlatList, Alert, RefreshControl, Modal, ActivityIndicator, TextInput 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -19,6 +19,13 @@ export default function DashboardScreen() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [contextMenuId, setContextMenuId] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState(''); // NEW: Search state
+
+  // NEW: Filter the projects based on the search query
+  const filteredProjects = projects.filter(p => 
+    (p.title?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+    (p.header?.className?.toLowerCase() || '').includes(searchQuery.toLowerCase())
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -139,6 +146,12 @@ export default function DashboardScreen() {
 
   const renderProject = ({ item }: { item: ExamProject }) => {
     const isSelected = selectedIds.has(item.id);
+    const qCount = getQuestionCount(item);
+    
+    // NEW: Math for the visual size meter (assuming 40 questions is a "Full" exam)
+    const fillPercent = Math.min(100, (qCount / 40) * 100);
+    const meterColor = qCount > 20 ? '#10B981' : qCount > 10 ? '#F59E0B' : '#3B82F6'; 
+
     return (
       <TouchableOpacity 
         onPress={() => selectionMode ? toggleSelection(item.id) : handleOpenProject(item)} 
@@ -160,11 +173,16 @@ export default function DashboardScreen() {
           {item.header?.className && (
             <Text style={styles.fileClass} numberOfLines={1}>{item.header.className}</Text>
           )}
-          <Text style={styles.fileDate}>
-            {new Date(item.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} 
-            {' • '} 
-            {getQuestionCount(item)} Questions
-          </Text>
+          <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4}}>
+            <Text style={styles.fileDate}>
+              {new Date(item.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} 
+              {' • '} {qCount} Qs
+            </Text>
+            {/* THE NEW VISUAL METER */}
+            <View style={styles.meterTrack}>
+              <View style={[styles.meterFill, { width: `${fillPercent}%`, backgroundColor: meterColor }]} />
+            </View>
+          </View>
         </View>
         {!selectionMode && (
           <TouchableOpacity onPress={() => setContextMenuId(item.id)} style={styles.moreBtn}>
@@ -190,14 +208,43 @@ export default function DashboardScreen() {
       </View>
 
       <View style={styles.sectionContainer}>
-        <View style={styles.heroCard}>
-          <View>
-            <Text style={styles.heroTitle}>New Scan</Text>
-            <Text style={styles.heroSub}>Convert handwritten paper to PDF</Text>
-          </View>
-          <TouchableOpacity onPress={() => router.push("/camera")} style={styles.fab}>
-            <Ionicons name="camera" size={28} color="#2563EB" />
+        {/* ACTION CARDS ROW */}
+        <View style={styles.actionRow}>
+          {/* Main Scan Button */}
+          <TouchableOpacity onPress={() => router.push("/camera")} style={styles.heroCardMain} activeOpacity={0.8}>
+            <View>
+              <Text style={styles.heroTitle}>New Scan</Text>
+              <Text style={styles.heroSub}>AI paper to PDF</Text>
+            </View>
+            <View style={styles.fabMain}>
+              <Ionicons name="camera" size={24} color="#2563EB" />
+            </View>
           </TouchableOpacity>
+
+          {/* Blank Exam Button */}
+          <TouchableOpacity onPress={() => router.push("/editor")} style={styles.heroCardSecondary} activeOpacity={0.8}>
+            <View style={styles.fabSecondary}>
+              <Ionicons name="document-text" size={24} color="#4B5563" />
+            </View>
+            <Text style={styles.heroTitleSecondary}>Blank</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* SEARCH BAR */}
+        <View style={styles.searchContainer}>
+          <Ionicons name="search" size={20} color="#9CA3AF" />
+          <TextInput 
+            style={styles.searchInput}
+            placeholder="Search exams or subjects..."
+            placeholderTextColor="#9CA3AF"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={20} color="#9CA3AF" />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -216,7 +263,7 @@ export default function DashboardScreen() {
             )}
           </View>
           
-          {projects.length === 0 ? (
+          {filteredProjects.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="file-tray-outline" size={48} color="#E5E7EB" />
               <Text style={styles.emptyText}>No drafts yet</Text>
@@ -224,7 +271,7 @@ export default function DashboardScreen() {
             </View>
           ) : (
             <FlatList
-              data={projects}
+              data={filteredProjects}
               renderItem={renderProject}
               keyExtractor={item => item.id}
               contentContainerStyle={{ paddingBottom: 20 }}
@@ -334,5 +381,22 @@ const styles = StyleSheet.create({
   contextMenuDivider: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 4 },
   loadingOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   loadingBox: { backgroundColor: 'white', borderRadius: 16, padding: 24, alignItems: 'center', minWidth: 200 },
-  loadingText: { marginTop: 12, fontSize: 16, fontWeight: '600', color: '#374151' }
+  loadingText: { marginTop: 12, fontSize: 16, fontWeight: '600', color: '#374151' },
+
+  // --- Workspace Upgrades ---
+  actionRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  heroCardMain: { flex: 1, backgroundColor: '#2563EB', borderRadius: 20, padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: "#2563EB", shadowOpacity: 0.3, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  heroTitle: { fontSize: 20, fontWeight: 'bold', color: 'white', marginBottom: 2 },
+  heroSub: { fontSize: 13, color: 'rgba(255,255,255,0.8)' },
+  fabMain: { width: 48, height: 48, borderRadius: 24, backgroundColor: 'white', justifyContent: 'center', alignItems: 'center' },
+  
+  heroCardSecondary: { width: '28%', backgroundColor: 'white', borderRadius: 20, padding: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#E5E7EB', shadowColor: "#000", shadowOpacity: 0.05, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  fabSecondary: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  heroTitleSecondary: { fontSize: 14, fontWeight: 'bold', color: '#4B5563' },
+
+  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 12, paddingHorizontal: 12, height: 44, borderWidth: 1, borderColor: '#E5E7EB' },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 15, color: '#111827' },
+
+  meterTrack: { width: 50, height: 6, backgroundColor: '#E5E7EB', borderRadius: 3, overflow: 'hidden' },
+  meterFill: { height: '100%', borderRadius: 3 },
 });

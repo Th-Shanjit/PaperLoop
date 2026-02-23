@@ -13,9 +13,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library'; 
 import { transcribeHandwriting, transcribeFormulaSnippet } from '../core/services/gemini'; 
-import { saveProject, getProject, ExamProject, Section, Question } from '../core/services/storage'; 
+import { saveProject, getProject, ExamProject, Section, Question, checkScanEligibility, deductScanToken, purchaseTokens, getAppSettings } from '../core/services/storage'; 
 import { generateExamHtml } from '../core/services/pdf';
-import { getAppSettings } from '../core/services/storage';
 
 // --- HELPERS ---
 const LAYOUT_CYCLE: Record<string, '1-column' | '2-column' | '3-column'> = {
@@ -351,14 +350,14 @@ const QuestionCard = memo(({
 
 const SectionCard = memo(({ 
   section, index, allSections, onUpdateSection, onDeleteSection, 
-  onUpdateQ, onDeleteQ, onMoveQ, onAddQ, onPasteScan, onPickDiagram, onMoveToSection,
+  onUpdateQ, onDeleteQ, onMoveQ, onAddQ, onPasteScan, onPickDiagram, onMoveToSection, onRescanSection,
   isSelectMode, selectedIds, onToggleSelect
 }: { 
   section: Section, index: number, 
   allSections: { id: string; title: string }[],
   onUpdateSection: (id: string, field: keyof Section, val: any) => void,
   onDeleteSection: (id: string) => void,
-  onUpdateQ: any, onDeleteQ: any, onMoveQ: any, onAddQ: any, onPasteScan: any, onPickDiagram: any, onMoveToSection: any,
+  onUpdateQ: any, onDeleteQ: any, onMoveQ: any, onAddQ: any, onPasteScan: any, onPickDiagram: any, onMoveToSection: any, onRescanSection: (secId: string, currentRescans?: number) => void,
   isSelectMode: boolean, selectedIds: Set<string>, onToggleSelect: (qId: string) => void
 }) => (
   <View style={styles.sectionContainer}>
@@ -371,12 +370,18 @@ const SectionCard = memo(({
          <TouchableOpacity onPress={() => onUpdateSection(section.id, 'layout', LAYOUT_CYCLE[section.layout] || '1-column')} style={[styles.layoutBadge, section.layout !== '1-column' && styles.layoutBadgeActive]} disabled={isSelectMode}>
             <Text style={[styles.layoutText, section.layout !== '1-column' && {color:'white'}]}>{LAYOUT_LABEL[section.layout] || '1 Col'}</Text>
          </TouchableOpacity>
+         {/* THE NEW RESCAN BUTTON */}
+         <TouchableOpacity onPress={() => onRescanSection(section.id, section.rescanCount)} style={[styles.layoutBadge, { backgroundColor: '#DBEAFE' }]} disabled={isSelectMode}>
+            <Ionicons name="refresh" size={14} color="#2563EB" />
+         </TouchableOpacity>
          <TouchableOpacity onPress={() => onDeleteSection(section.id)} style={styles.delSectionBtn} disabled={isSelectMode}><Ionicons name="close" size={16} color="#ef4444" /></TouchableOpacity>
       </View>
     </View>
+    
     {section.questions.map((q, idx) => (
-       <QuestionCard key={q.id} item={{...q, number: (idx+1).toString()}} sectionId={section.id} allSections={allSections} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} onPickDiagram={onPickDiagram} onMoveToSection={onMoveToSection} isSelectMode={isSelectMode} isSelected={selectedIds.has(q.id)} onToggleSelect={onToggleSelect}/>
-    ))}
+      <QuestionCard key={q.id} item={q} sectionId={section.id} allSections={allSections} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} onPickDiagram={onPickDiagram} onMoveToSection={onMoveToSection} isSelectMode={isSelectMode} isSelected={selectedIds.has(q.id)} onToggleSelect={onToggleSelect}/>
+      ))}
+
     <View style={styles.sectionFooter}>
        <TouchableOpacity onPress={() => onPasteScan(section.id)} style={styles.secActionBtn} disabled={isSelectMode}><Ionicons name="camera" size={16} color="#2563EB" /><Text style={styles.secActionText}>Scan</Text></TouchableOpacity>
        <TouchableOpacity onPress={() => onAddQ(section.id)} style={styles.secActionBtn} disabled={isSelectMode}><Ionicons name="add" size={16} color="#2563EB" /><Text style={styles.secActionText}>Question</Text></TouchableOpacity>
@@ -406,8 +411,9 @@ export default function EditorScreen() {
   const [fontTheme, setFontTheme] = useState<'inter' | 'times' | 'bookman' | 'calibri' | 'arial' | 'garamond'>('calibri');
   const [scanStatus, setScanStatus] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
-  const [scanMenuConfig, setScanMenuConfig] = useState<{ visible: boolean, sectionId: string | null }>({ visible: false, sectionId: null });
+  const [scanMenuConfig, setScanMenuConfig] = useState<{ visible: boolean, sectionId: string | null, isRescan: boolean }>({ visible: false, sectionId: null, isRescan: false });
   const [showSettings, setShowSettings] = useState(false);
+  const [showPaywall, setShowPaywall] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [exportedPdfUri, setExportedPdfUri] = useState<string | null>(null);
   const [isSelectMode, setIsSelectMode] = useState(false);
@@ -715,30 +721,85 @@ export default function EditorScreen() {
     }
   };
 
-  // Helper to process the full page scan
-  const processPageScan = async (secId: string, result: ImagePicker.ImagePickerResult) => {
+  // NEW: The Fairness Engine Scanner
+  const processPageScan = async (secId: string, result: ImagePicker.ImagePickerResult, isRescan: boolean = false) => {
     if (!result.canceled && result.assets && result.assets[0]) {
       try {
         setScanStatus('Warming up AI engine...');
-        const geminiResult = await transcribeHandwriting(
-          [{ uri: result.assets[0].uri }],
-          (statusMsg) => setScanStatus(statusMsg) 
-        );
+        const geminiResult = await transcribeHandwriting([{ uri: result.assets[0].uri }], (msg) => setScanStatus(msg));
+        
         let newQuestions: Question[] = [];
         if (geminiResult.sections) {
           geminiResult.sections.forEach((s: any) => { newQuestions.push(...s.questions); });
         }
-        setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, ...newQuestions] } : s));
+
+        // --- THE FAIRNESS RULES ---
+
+        // Rule 1: Zero Questions Found (Total Failure)
+        if (newQuestions.length === 0) {
+          Alert.alert("Scan Failed", "We couldn't detect any questions on this page. Please try taking a brighter photo.\n\n(No scan token was deducted).");
+          return;
+        }
+
+        // Rule 2: Low Yield (1 or 2 questions)
+        if (newQuestions.length <= 2 && !isRescan) {
+          Alert.alert(
+            "Low Questions Detected", 
+            `We only found ${newQuestions.length} question(s). Do you want to keep this (Costs 1 Token) or discard and try again (Free)?`,
+            [
+              { text: "Discard (Free)", style: "cancel" },
+              { text: "Keep (-1 Token)", onPress: async () => {
+                  await deductScanToken();
+                  setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, ...newQuestions] } : s));
+              }}
+            ]
+          );
+          return;
+        }
+
+        // Rule 3: Success! Inject questions and charge the toll (if not a free rescan)
+        if (!isRescan) {
+          await deductScanToken();
+        }
+        
+        setSections(prev => prev.map(s => {
+          if (s.id === secId) {
+            // If it's a rescan, we REPLACE the old questions. Otherwise, we ADD to them.
+            return { 
+              ...s, 
+              rescanCount: isRescan ? (s.rescanCount || 0) + 1 : s.rescanCount,
+              questions: isRescan ? newQuestions : [...s.questions, ...newQuestions] 
+            };
+          }
+          return s;
+        }));
+
       } catch (e) { 
-        Alert.alert("Error", "Scan failed"); 
+        Alert.alert("Error", "Scan completely failed. No tokens were deducted."); 
       } finally { 
         setScanStatus(''); 
       }
     }
   };
 
-  const handleScanToSection = (secId: string) => {
-    setScanMenuConfig({ visible: true, sectionId: secId });
+  const handleScanToSection = async (secId: string) => {
+    const canScan = await checkScanEligibility();
+    if (canScan) {
+      setScanMenuConfig({ visible: true, sectionId: secId, isRescan: false });
+    } else {
+      setShowPaywall(true);
+    }
+  };
+
+  const handleRescanSection = (secId: string, currentRescans: number = 0) => {
+    if (currentRescans >= 2) {
+      Alert.alert("Free Rescans Exhausted", "You have used your 2 free rescans for this section. Scanning again will cost a regular token.", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Use Token", onPress: () => handleScanToSection(secId) }
+      ]);
+    } else {
+      setScanMenuConfig({ visible: true, sectionId: secId, isRescan: true });
+    }
   };
   const handleHome = () => {
     router.back(); 
@@ -793,6 +854,7 @@ export default function EditorScreen() {
                         onUpdateQ={updateQ} onDeleteQ={deleteQ} onMoveQ={moveQ} onAddQ={addQ} onPasteScan={handleScanToSection}
                         onPickDiagram={handlePickDiagram}
                         onMoveToSection={moveToSection}
+                        onRescanSection={handleRescanSection}
                         isSelectMode={isSelectMode}
                         selectedIds={selectedIds}
                         onToggleSelect={toggleSelectQuestion}
@@ -809,6 +871,7 @@ export default function EditorScreen() {
                 } 
                 contentContainerStyle={styles.list} 
                 showsVerticalScrollIndicator={false} 
+                keyboardShouldPersistTaps="always"
                 ListFooterComponent={
                     <View style={styles.footerActions}>
                       <TouchableOpacity onPress={addSection} style={styles.addBtn}>
@@ -954,16 +1017,17 @@ export default function EditorScreen() {
 
       {/* SCAN IMAGE SOURCE MODAL */}
       <Modal visible={scanMenuConfig.visible} transparent animationType="fade">
-        <TouchableOpacity style={styles.modalOverlay} onPress={() => setScanMenuConfig({ visible: false, sectionId: null })} activeOpacity={1}>
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setScanMenuConfig({ visible: false, sectionId: null, isRescan: false })} activeOpacity={1}>
           <View style={styles.dropdownMenu}>
             <Text style={styles.dropdownTitle}>Scan New Page</Text>
             
             <TouchableOpacity style={styles.dropdownItem} onPress={async () => {
               const secId = scanMenuConfig.sectionId;
-              setScanMenuConfig({ visible: false, sectionId: null });
+              const isRescan = scanMenuConfig.isRescan;
+              setScanMenuConfig({ visible: false, sectionId: null, isRescan: false });
               if (secId) {
                 const result = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
-                processPageScan(secId, result);
+                processPageScan(secId, result, isRescan);
               }
             }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -974,10 +1038,11 @@ export default function EditorScreen() {
 
             <TouchableOpacity style={styles.dropdownItem} onPress={async () => {
               const secId = scanMenuConfig.sectionId;
-              setScanMenuConfig({ visible: false, sectionId: null });
+              const isRescan = scanMenuConfig.isRescan;
+              setScanMenuConfig({ visible: false, sectionId: null, isRescan: false });
               if (secId) {
                 const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
-                processPageScan(secId, result);
+                processPageScan(secId, result, isRescan);
               }
             }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -987,6 +1052,43 @@ export default function EditorScreen() {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* PAYWALL MODAL */}
+      <Modal visible={showPaywall} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.exportModal}>
+            <Text style={styles.exportTitle}>Out of Scan Tokens</Text>
+            <Text style={styles.exportSub}>Purchase more tokens to continue scanning</Text>
+            <View style={styles.exportButtons}>
+              <TouchableOpacity onPress={async () => {
+                await purchaseTokens(10);
+                setShowPaywall(false);
+                Alert.alert("Success", "10 tokens added!");
+              }} style={styles.exportBtn}>
+                <View style={styles.exportIconCircle}>
+                  <Ionicons name="add-circle" size={32} color="#2563EB" />
+                </View>
+                <Text style={styles.exportBtnText}>10 Tokens</Text>
+                <Text style={styles.exportBtnSub}>$2.99</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={async () => {
+                await purchaseTokens(50);
+                setShowPaywall(false);
+                Alert.alert("Success", "50 tokens added!");
+              }} style={styles.exportBtn}>
+                <View style={styles.exportIconCircle}>
+                  <Ionicons name="add-circle" size={32} color="#2563EB" />
+                </View>
+                <Text style={styles.exportBtnText}>50 Tokens</Text>
+                <Text style={styles.exportBtnSub}>$9.99</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity onPress={() => setShowPaywall(false)} style={styles.exportCancel}>
+              <Text style={styles.exportCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* BULK ACTION BAR */}

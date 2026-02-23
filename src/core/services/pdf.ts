@@ -231,6 +231,9 @@ export const generateExamHtml = async (
     formatted = formatted.replace(/\\wedge/g, '^');
     formatted = formatted.replace(/\\Lambda/g, '^');
 
+    // ADD THIS: 3. Convert explicit "Enters" (new lines) into HTML line breaks
+    formatted = formatted.replace(/\n/g, '<br/>');
+
     return formatted;
   };
 
@@ -240,13 +243,13 @@ export const generateExamHtml = async (
     fontTheme === 'times' 
     ? "body { font-family: 'Times New Roman', Times, serif; }"
     : fontTheme === 'bookman'
-    ? "body { font-family: 'Bookman Old Style', Bookman, 'URW Bookman L', 'Palatino Linotype', serif; }"
+    ? "@import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;700&display=swap'); body { font-family: 'Lora', serif; }"
     : fontTheme === 'calibri'
     ? "body { font-family: Calibri, 'Segoe UI', Arial, sans-serif; }"
     : fontTheme === 'arial'
     ? "body { font-family: Arial, Helvetica, sans-serif; }"
     : fontTheme === 'garamond'
-    ? "body { font-family: Garamond, 'EB Garamond', serif; }"
+    ? "@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;700&display=swap'); body { font-family: 'EB Garamond', serif; }"
     : "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'); body { font-family: 'Inter', sans-serif; }";
 
   const getColumnCount = (layout: string) => {

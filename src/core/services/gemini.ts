@@ -83,6 +83,38 @@ const callGeminiWithRetry = async (url: string, payload: any, maxRetries = 3) =>
   }
 };
 
+// --- THE MAGIC AUTO-CROPPER ---
+const autoCropDiagram = async (imageUri: string, box2d: number[], imgWidth: number, imgHeight: number): Promise<string | null> => {
+  try {
+    const [ymin, xmin, ymax, xmax] = box2d;
+    
+    // Add a 5% safe padding so we don't accidentally chop off the edges of the drawing
+    const padY = (ymax - ymin) * 0.05;
+    const padX = (xmax - xmin) * 0.05;
+
+    const safeYmin = Math.max(0, ymin - padY);
+    const safeXmin = Math.max(0, xmin - padX);
+    const safeYmax = Math.min(1000, ymax + padY);
+    const safeXmax = Math.min(1000, xmax + padX);
+
+    // Convert the AI's 0-1000 scale into actual pixels
+    const originX = (safeXmin / 1000) * imgWidth;
+    const originY = (safeYmin / 1000) * imgHeight;
+    const width = ((safeXmax - safeXmin) / 1000) * imgWidth;
+    const height = ((safeYmax - safeYmin) / 1000) * imgHeight;
+
+    const result = await ImageManipulator.manipulateAsync(
+      imageUri,
+      [{ crop: { originX, originY, width, height } }],
+      { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+    );
+    return result.uri;
+  } catch (e) {
+    console.error("Auto-crop failed:", e);
+    return null;
+  }
+};
+
 // --- 4. MAIN SCANNING ENGINE (Staggered Parallel) ---
 export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (msg: string) => void) => {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
@@ -169,10 +201,10 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
       
       let sections = data.sections || [];
       
-      // Attach the correct UI data
-      sections.forEach((sec: any) => {
+      // Attach the correct UI data and AUTO-CROP
+      for (const sec of sections) {
         if (sec.questions) {
-          sec.questions.forEach((q: any) => {
+          for (const q of sec.questions) {
             q.pageUri = page.uri; 
             q.id = Date.now().toString() + Math.random();
             q.number = q.number || "";
@@ -180,12 +212,21 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
             q.marks = q.marks || "";
             q.type = q.type || 'standard';
             q.options = q.options || [];
-            q.diagramUri = q.has_diagram ? "NEEDS_CROP" : undefined;
+            
+            // --- FIRE THE AUTO-CROPPER ---
+            if (q.has_diagram && q.box_2d && q.box_2d.length === 4) {
+              const croppedUri = await autoCropDiagram(processedImg.uri, q.box_2d, processedImg.width, processedImg.height);
+              // If successful, bypass "NEEDS_CROP" and instantly display the image!
+              q.diagramUri = croppedUri || "NEEDS_CROP";
+            } else {
+              q.diagramUri = q.has_diagram ? "NEEDS_CROP" : undefined;
+            }
+            
             q.hideText = false;
             q.isFullWidth = false;
-          });
+          }
         }
-      });
+      }
 
       if (onProgress && pages.length > 1) onProgress(`Page ${index + 1} processed...`);
       return sections;

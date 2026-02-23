@@ -32,6 +32,7 @@ export interface Section {
   title: string;
   layout: '1-column' | '2-column' | '3-column';
   showDivider?: boolean;
+  rescanCount?: number; // NEW: Track free rescans!
   questions: Question[];
 }
 
@@ -136,6 +137,8 @@ export interface AppSettings {
   defaultInstructions: string;
   defaultFontTheme: string;
   proLicenseKey?: string;
+  isPro?: boolean;
+  scanTokens?: number;
 }
 
 const SETTINGS_FILE = FileSystem.documentDirectory + 'app_settings.json';
@@ -144,7 +147,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   organizationName: "PaperLoop Academy",
   defaultDuration: "90 Mins",
   defaultInstructions: "1. All questions are compulsory.\n2. Draw diagrams where necessary.",
-  defaultFontTheme: 'calibri'
+  defaultFontTheme: 'calibri',
+  isPro: false,
+  scanTokens: 5
 };
 
 export const getAppSettings = async (): Promise<AppSettings> => {
@@ -180,4 +185,27 @@ export const clearImageCache = async () => {
   } catch (e) {
     console.error("Failed to clear cache", e);
   }
+};
+
+// 1. THE CHECKER (Runs before the camera opens)
+export const checkScanEligibility = async (): Promise<boolean> => {
+  const settings = await getAppSettings();
+  if (settings.isPro) return true;
+  return (settings.scanTokens || 0) > 0;
+};
+
+// 2. THE DEDUCTOR (Runs only after a successful AI output)
+export const deductScanToken = async () => {
+  const settings = await getAppSettings();
+  if (!settings.isPro && (settings.scanTokens || 0) > 0) {
+    settings.scanTokens = (settings.scanTokens || 0) - 1;
+    await saveAppSettings(settings);
+  }
+};
+
+// 3. THE STORE (Mock Purchase)
+export const purchaseTokens = async (amount: number) => {
+  const settings = await getAppSettings();
+  settings.scanTokens = (settings.scanTokens || 0) + amount;
+  await saveAppSettings(settings);
 };
