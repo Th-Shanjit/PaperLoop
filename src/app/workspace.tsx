@@ -11,7 +11,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import { getSessionPages, removePageFromSession, updatePageInSession, swapPagesInSession, clearSession, ScannedPage, currentSessionPages } from '../core/store/session';
 import { transcribeHandwriting } from '../core/services/gemini';
-import { deductScanToken } from '../core/services/storage';
+import { deductScanToken, getAppSettings } from '../core/services/storage';
 
 export default function WorkspaceScreen() {
   const router = useRouter();
@@ -27,9 +27,10 @@ export default function WorkspaceScreen() {
   useFocusEffect(
     useCallback(() => {
       setPages([...getSessionPages()]);
-      // Fetch available tokens
-      import('../core/services/storage').then(({ getAppSettings }) => {
-        getAppSettings().then(settings => setTokensLeft(settings.scanTokens || 0));
+      
+      // Clean, instant token fetch
+      getAppSettings().then(settings => {
+        setTokensLeft(settings.scanTokens || 0);
       });
     }, [])
   );
@@ -86,6 +87,22 @@ export default function WorkspaceScreen() {
 
   const handleAnalyze = async () => {
     if (pages.length === 0) return;
+
+    // --- THE STOP LOSS GUARD ---
+    const settings = await getAppSettings();
+    const currentTokens = settings.scanTokens || 0;
+    
+    // If they aren't Pro, and they are trying to scan more pages than they can afford:
+    if (!settings.isPro && pages.length > currentTokens) {
+      Alert.alert(
+        "Not Enough Scans", 
+        `You are trying to analyze ${pages.length} page(s), but you only have ${currentTokens} scan(s) left.\n\nPlease top up in the Settings menu or remove some pages.`,
+        [{ text: "OK", style: "default" }]
+      );
+      return;
+    }
+    // ---------------------------
+
     setIsAnalyzing(true);
     setScanStatus('Warming up AI engine...'); 
     
