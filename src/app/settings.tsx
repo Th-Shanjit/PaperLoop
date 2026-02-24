@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, Image, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, Image, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -75,7 +75,22 @@ export default function SettingsScreen() {
   };
 
   const contactSupport = () => {
-    Alert.alert("Pro Upgrade", "To enable custom branding, please contact support via WhatsApp at +91 XXXXXXXXXX.");
+    // Replace with your actual number and country code (e.g., 919876543210 for India)
+    const phoneNumber = "+91 6290739163"; 
+    const message = "Hi PaperLoop Support, I need help with...";
+    
+    // This creates the deep link that forces the phone to open WhatsApp directly
+    const url = `whatsapp://send?phone=${phoneNumber}&text=${encodeURIComponent(message)}`;
+
+    Linking.canOpenURL(url)
+      .then(supported => {
+        if (!supported) {
+          Alert.alert("WhatsApp Not Found", "Please install WhatsApp to contact support, or email us directly.");
+        } else {
+          return Linking.openURL(url);
+        }
+      })
+      .catch(err => console.error('An error occurred', err));
   };
 
   if (!settings) return null;

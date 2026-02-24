@@ -464,7 +464,7 @@ export default function EditorScreen() {
   // Safely push a snapshot of the exam to the history stack
   const saveHistory = useCallback((currentSections: Section[]) => {
     setUndoStack(prev => {
-      const newStack = [...prev, currentSections];
+      const newStack = [...prev, JSON.parse(JSON.stringify(currentSections))];
       // Keep only the last 15 actions to prevent memory crashes
       return newStack.length > 15 ? newStack.slice(newStack.length - 15) : newStack;
     });
