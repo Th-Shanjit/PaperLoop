@@ -117,8 +117,8 @@ const autoCropDiagram = async (imageUri: string, box2d: number[], imgWidth: numb
 
 // --- 4. MAIN SCANNING ENGINE (Staggered Parallel) ---
 export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (msg: string) => void) => {
-  const apiKey = https://paperloop-proxy.th-shanjit.workers.dev;
-  const url = `${PROXY_URL}?model=${MODEL_ID}`
+  const PROXY_URL = "https://paperloop-proxy.th-shanjit.workers.dev";
+  const url = `${PROXY_URL}?model=${MODEL_ID}`;
   
   const responseSchema = {
     type: "OBJECT",
@@ -259,8 +259,8 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
 
 // --- 5. THE SNIPPET ENGINE ---
 export const transcribeFormulaSnippet = async (uri: string): Promise<string> => {
-  const apiKey = https://paperloop-proxy.th-shanjit.workers.dev;
-  const url = `${PROXY_URL}?model=${MODEL_ID}`
+  const PROXY_URL = "https://paperloop-proxy.th-shanjit.workers.dev";
+  const url = `${PROXY_URL}?model=${MODEL_ID}`;
 
   try {
     const processedImg = await compressImage(uri);

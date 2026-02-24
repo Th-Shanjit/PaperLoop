@@ -5,6 +5,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import Purchases from 'react-native-purchases';
+import Constants from 'expo-constants';
 import { loadProjects, deleteProject, ExamProject, getProject } from '../core/services/storage';
 import { generateExamHtml } from '../core/services/pdf';
 import * as Print from 'expo-print';

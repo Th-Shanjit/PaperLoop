@@ -23,7 +23,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.PaperLoop"
+      "package": "com.paperloop.app"
     },
     "web": {
       "favicon": "./assets/favicon.png"

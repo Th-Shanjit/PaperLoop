@@ -1,7 +1,36 @@
+import { useEffect } from 'react';
 import { Stack } from 'expo-router';
-import { View } from 'react-native';
+import { Platform } from 'react-native';
+import Purchases from 'react-native-purchases';
+import Constants from 'expo-constants'; // <-- NEW IMPORT
 
-export default function Layout() {
+const API_KEYS = {
+  apple: "appl_YOUR_APPLE_KEY_HERE",
+  google: "goog_wFYnGCIMqJwlCoUvpUwBPtTtAtG"
+};
+
+export default function RootLayout() {
+  useEffect(() => {
+    const initPurchases = async () => {
+      // THE BYPASS: If we are in Expo Go, do not initialize RevenueCat!
+      if (Constants.appOwnership === 'expo') {
+        console.log("Running in Expo Go: Bypassing RevenueCat native setup.");
+        return;
+      }
+
+      try {
+        if (Platform.OS === 'ios') {
+          Purchases.configure({ apiKey: API_KEYS.apple });
+        } else if (Platform.OS === 'android') {
+          Purchases.configure({ apiKey: API_KEYS.google });
+        }
+      } catch (e) {
+        console.error("Failed to initialize RevenueCat", e);
+      }
+    };
+    initPurchases();
+  }, []);
+
   return (
     <Stack screenOptions={{ headerShown: false, animation: 'default' }}>
       {/* Dashboard: The Base Layer */}

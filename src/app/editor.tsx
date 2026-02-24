@@ -12,6 +12,8 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library'; 
+import Purchases from 'react-native-purchases';
+import Constants from 'expo-constants';
 import { transcribeHandwriting, transcribeFormulaSnippet } from '../core/services/gemini'; 
 import { saveProject, getProject, ExamProject, Section, Question, checkScanEligibility, deductScanToken, purchaseTokens, getAppSettings } from '../core/services/storage'; 
 import { generateExamHtml } from '../core/services/pdf';
@@ -1062,9 +1064,38 @@ export default function EditorScreen() {
             <Text style={styles.exportSub}>Purchase more tokens to continue scanning</Text>
             <View style={styles.exportButtons}>
               <TouchableOpacity onPress={async () => {
-                await purchaseTokens(10);
-                setShowPaywall(false);
-                Alert.alert("Success", "10 tokens added!");
+                // --- THE BYPASS ---
+                if (Constants.appOwnership === 'expo') {
+                  await purchaseTokens(10);
+                  setShowPaywall(false);
+                  Alert.alert("Expo Go Mode", "Mock payment successful. Tokens added!");
+                  return;
+                }
+                // ------------------
+
+                try {
+                  // 1. Fetch the products you set up in the RevenueCat dashboard
+                  const offerings = await Purchases.getOfferings();
+                  
+                  // 2. Look for the specific "10 Scans" package (you will name this in the dashboard)
+                  const packageToBuy = offerings.current?.availablePackages.find(p => p.identifier === '10_scans_pack');
+                  
+                  if (packageToBuy) {
+                    // 3. Trigger the native Apple/Google payment sheet!
+                    const { customerInfo } = await Purchases.purchasePackage(packageToBuy);
+                    
+                    // 4. If payment succeeds, give them the tokens locally!
+                    await purchaseTokens(10);
+                    setShowPaywall(false);
+                    Alert.alert("Payment Successful!", "10 Scans have been added to your account.");
+                  } else {
+                    Alert.alert("Store Error", "Product not found. Please try again later.");
+                  }
+                } catch (e: any) {
+                  if (!e.userCancelled) {
+                    Alert.alert("Payment Failed", e.message);
+                  }
+                }
               }} style={styles.exportBtn}>
                 <View style={styles.exportIconCircle}>
                   <Ionicons name="add-circle" size={32} color="#2563EB" />
@@ -1073,9 +1104,38 @@ export default function EditorScreen() {
                 <Text style={styles.exportBtnSub}>$2.99</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={async () => {
-                await purchaseTokens(50);
-                setShowPaywall(false);
-                Alert.alert("Success", "50 tokens added!");
+                // --- THE BYPASS ---
+                if (Constants.appOwnership === 'expo') {
+                  await purchaseTokens(50);
+                  setShowPaywall(false);
+                  Alert.alert("Expo Go Mode", "Mock payment successful. Tokens added!");
+                  return;
+                }
+                // ------------------
+
+                try {
+                  // 1. Fetch the products you set up in the RevenueCat dashboard
+                  const offerings = await Purchases.getOfferings();
+                  
+                  // 2. Look for the specific "50 Scans" package (you will name this in the dashboard)
+                  const packageToBuy = offerings.current?.availablePackages.find(p => p.identifier === '50_scans_pack');
+                  
+                  if (packageToBuy) {
+                    // 3. Trigger the native Apple/Google payment sheet!
+                    const { customerInfo } = await Purchases.purchasePackage(packageToBuy);
+                    
+                    // 4. If payment succeeds, give them the tokens locally!
+                    await purchaseTokens(50);
+                    setShowPaywall(false);
+                    Alert.alert("Payment Successful!", "50 Scans have been added to your account.");
+                  } else {
+                    Alert.alert("Store Error", "Product not found. Please try again later.");
+                  }
+                } catch (e: any) {
+                  if (!e.userCancelled) {
+                    Alert.alert("Payment Failed", e.message);
+                  }
+                }
               }} style={styles.exportBtn}>
                 <View style={styles.exportIconCircle}>
                   <Ionicons name="add-circle" size={32} color="#2563EB" />
