@@ -201,7 +201,12 @@ export default function DashboardScreen() {
       
       <View style={styles.header}>
         <View>
-          <Text style={styles.greeting}>PaperLoop</Text>
+          <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
+            <Text style={styles.greeting}>PaperLoop</Text>
+            <View style={{backgroundColor: '#DBEAFE', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6}}>
+              <Text style={{color: '#2563EB', fontSize: 10, fontWeight: '900', letterSpacing: 0.5}}>BETA</Text>
+            </View>
+          </View>
           <Text style={styles.subGreeting}>Digitize & Grade Exams</Text>
         </View>
         <TouchableOpacity onPress={() => router.push('/settings')} style={styles.settingsBtn}>

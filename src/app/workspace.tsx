@@ -22,10 +22,15 @@ export default function WorkspaceScreen() {
   const [reorderModalVisible, setReorderModalVisible] = useState(false);
   const [targetIndex, setTargetIndex] = useState<string>("");
   const [sourceIndex, setSourceIndex] = useState<number | null>(null);
+  const [tokensLeft, setTokensLeft] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
       setPages([...getSessionPages()]);
+      // Fetch available tokens
+      import('../core/services/storage').then(({ getAppSettings }) => {
+        getAppSettings().then(settings => setTokensLeft(settings.scanTokens || 0));
+      });
     }, [])
   );
 
@@ -288,14 +293,19 @@ export default function WorkspaceScreen() {
          </TouchableOpacity>
 
          {pages.length > 0 && (
-          <TouchableOpacity onPress={handleAnalyze} disabled={isAnalyzing} style={styles.analyzeBtn}>
-            {isAnalyzing ? <ActivityIndicator color="white"/> : (
-              <>
-                <Text style={styles.analyzeText}>Analyze {pages.length} Pages</Text>
-                <Ionicons name="arrow-forward" size={20} color="white" style={{marginLeft:8}}/>
-              </>
-            )}
-          </TouchableOpacity>
+          <View style={{flex: 1, marginLeft: 16}}>
+            <Text style={{fontSize: 11, fontWeight: '600', color: '#6B7280', textAlign: 'center', marginBottom: 6}}>
+              {tokensLeft} Scans Remaining
+            </Text>
+            <TouchableOpacity onPress={handleAnalyze} disabled={isAnalyzing} style={[styles.analyzeBtn, {marginLeft: 0}]}>
+              {isAnalyzing ? <ActivityIndicator color="white"/> : (
+                <>
+                  <Text style={styles.analyzeText}>Analyze {pages.length} Pages</Text>
+                  <Ionicons name="arrow-forward" size={20} color="white" style={{marginLeft:8}}/>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
         )}
       </View>
 

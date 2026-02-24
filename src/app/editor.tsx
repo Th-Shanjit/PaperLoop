@@ -808,37 +808,39 @@ export default function EditorScreen() {
       setScanMenuConfig({ visible: true, sectionId: secId, isRescan: true });
     }
   };
-  const handleHome = () => {
-    router.back(); 
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#F3F4F6" />
       
       {/* HEADER NAV */}
       <View style={styles.nav}>
-        <TouchableOpacity onPress={handleHome} style={styles.navBack}><Ionicons name="home-outline" size={24} color="#111" /></TouchableOpacity>
+        {/* LEFT: Home Button */}
+        <View style={{ flex: 1, alignItems: 'flex-start' }}>
+          <TouchableOpacity onPress={() => router.replace('/')} style={styles.navBack}>
+            <Ionicons name="home-outline" size={24} color="#111" />
+          </TouchableOpacity>
+        </View>
         
-        {/* VIEW MODE TOGGLE */}
-        <View style={styles.toggleContainer}>
-           <TouchableOpacity onPress={handleTogglePreview} style={[styles.toggleBtn, viewMode === 'edit' && styles.toggleActive]}>
-              <Text style={[styles.toggleText, viewMode === 'edit' && styles.toggleTextActive]}>Edit</Text>
-           </TouchableOpacity>
-           <TouchableOpacity onPress={handleTogglePreview} style={[styles.toggleBtn, viewMode === 'preview' && styles.toggleActive]}>
-              <Text style={[styles.toggleText, viewMode === 'preview' && styles.toggleTextActive]}>Preview</Text>
-           </TouchableOpacity>
+        {/* CENTER: View Mode Toggle */}
+        <View style={{ flex: 1, alignItems: 'center' }}>
+          <View style={styles.toggleContainer}>
+             <TouchableOpacity onPress={handleTogglePreview} style={[styles.toggleBtn, viewMode === 'edit' && styles.toggleActive]}>
+                <Text style={[styles.toggleText, viewMode === 'edit' && styles.toggleTextActive]}>Edit</Text>
+             </TouchableOpacity>
+             <TouchableOpacity onPress={handleTogglePreview} style={[styles.toggleBtn, viewMode === 'preview' && styles.toggleActive]}>
+                <Text style={[styles.toggleText, viewMode === 'preview' && styles.toggleTextActive]}>Preview</Text>
+             </TouchableOpacity>
+          </View>
         </View>
 
-        {/* ADD THIS BUTTON RIGHT BEFORE THE SAVE BUTTON */}
-        <View style={{flexDirection: 'row', gap: 10}}>
+        {/* RIGHT: Save & Select */}
+        <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
           <TouchableOpacity 
             onPress={() => { setIsSelectMode(!isSelectMode); setSelectedIds(new Set()); }} 
             style={[styles.saveBtn, isSelectMode && {backgroundColor:'#2563EB'}]}
           >
             <Ionicons name="checkbox-outline" size={20} color={isSelectMode ? "white" : "#2563EB"} />
           </TouchableOpacity>
-
           <TouchableOpacity onPress={handleManualSave} style={styles.saveBtn} disabled={isSaving}>
             {isSaving ? <ActivityIndicator size="small" color="#2563EB"/> : <Ionicons name="save-outline" size={20} color="#2563EB" />}
           </TouchableOpacity>
