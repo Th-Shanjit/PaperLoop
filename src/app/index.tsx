@@ -7,13 +7,14 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Purchases from 'react-native-purchases';
 import Constants from 'expo-constants';
-import { loadProjects, deleteProject, ExamProject, getProject } from '../core/services/storage';
+import { loadProjects, deleteProject, ExamProject, getProject, getAppSettings, saveAppSettings } from '../core/services/storage';
 import { generateExamHtml } from '../core/services/pdf';
 import * as Print from 'expo-print';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
+import OnboardingModal from '../components/OnboardingModal';
 
 export default function DashboardScreen() {
   const router = useRouter();
@@ -25,6 +26,7 @@ export default function DashboardScreen() {
   const [contextMenuId, setContextMenuId] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [searchQuery, setSearchQuery] = useState(''); // NEW: Search state
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   // NEW: Filter the projects based on the search query
   const filteredProjects = projects.filter(p => 
@@ -42,7 +44,20 @@ export default function DashboardScreen() {
     setRefreshing(true);
     const data = await loadProjects();
     setProjects(data);
+    
+    // Check if they need to see the onboarding
+    const settings = await getAppSettings();
+    if (!settings.hasSeenOnboarding) {
+      setShowOnboarding(true);
+    }
+    
     setRefreshing(false);
+  };
+
+  const finishOnboarding = async () => {
+    const settings = await getAppSettings();
+    await saveAppSettings({ ...settings, hasSeenOnboarding: true });
+    setShowOnboarding(false);
   };
 
   const handleOpenProject = (project: ExamProject) => {
@@ -344,6 +359,7 @@ export default function DashboardScreen() {
       )}
 
       <CustomAlert {...alertState} onClose={closeAlert} />
+      <OnboardingModal visible={showOnboarding} onFinish={finishOnboarding} />
     </SafeAreaView>
   );
 }

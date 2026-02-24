@@ -7,9 +7,12 @@ import * as ImagePicker from 'expo-image-picker';
 import Purchases from 'react-native-purchases';
 import Constants from 'expo-constants';
 import { getAppSettings, saveAppSettings, AppSettings, clearImageCache, purchaseTokens } from '../core/services/storage';
+import CustomAlert from '../components/CustomAlert';
+import { useCustomAlert } from '../hooks/useCustomAlert';
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const { alertState, showAlert, closeAlert } = useCustomAlert();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -25,7 +28,7 @@ export default function SettingsScreen() {
   const handleSave = async () => {
     if (settings) {
       await saveAppSettings(settings);
-      Alert.alert("Saved", "Settings updated successfully.");
+      showAlert("Saved", "Settings updated successfully.");
       router.back();
     }
   };
@@ -40,7 +43,7 @@ export default function SettingsScreen() {
       await purchaseTokens(tokensToAdd);
       setSettings({ ...settings, scanTokens: (settings.scanTokens || 0) + tokensToAdd });
       setIsProcessing(false);
-      Alert.alert("Expo Go Mode", `Mock payment successful. ${tokensToAdd} tokens added!`);
+      showAlert("Expo Go Mode", `Mock payment successful. ${tokensToAdd} tokens added!`);
       return;
     }
 
@@ -53,23 +56,23 @@ export default function SettingsScreen() {
         await Purchases.purchasePackage(packageToBuy);
         await purchaseTokens(tokensToAdd);
         setSettings({ ...settings, scanTokens: (settings.scanTokens || 0) + tokensToAdd });
-        Alert.alert("Payment Successful!", `${tokensToAdd} Scans added to your account.`);
+        showAlert("Payment Successful!", `${tokensToAdd} Scans added to your account.`);
       } else {
-        Alert.alert("Store Error", "Product not configured correctly.");
+        showAlert("Store Error", "Product not configured correctly.");
       }
     } catch (e: any) {
-      if (!e.userCancelled) Alert.alert("Payment Failed", e.message);
+      if (!e.userCancelled) showAlert("Payment Failed", e.message);
     } finally {
       setIsProcessing(false);
     }
   };
 
   const handleClearCache = async () => {
-    Alert.alert("Clear Cache?", "This will delete temporary scan images. Your saved exams will not be affected.", [
+    showAlert("Clear Cache?", "This will delete temporary scan images. Your saved exams will not be affected.", [
       { text: "Cancel", style: "cancel" },
       { text: "Clear Now", style: "destructive", onPress: async () => {
           await clearImageCache();
-          Alert.alert("Success", "Cache cleared successfully.");
+          showAlert("Success", "Cache cleared successfully.");
       }}
     ]);
   };
@@ -85,12 +88,30 @@ export default function SettingsScreen() {
     Linking.canOpenURL(url)
       .then(supported => {
         if (!supported) {
-          Alert.alert("WhatsApp Not Found", "Please install WhatsApp to contact support, or email us directly.");
+          showAlert("WhatsApp Not Found", "Please install WhatsApp to contact support, or email us directly.");
         } else {
           return Linking.openURL(url);
         }
       })
       .catch(err => console.error('An error occurred', err));
+  };
+
+  const handleLogoUpload = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1], // Forces a square crop for a clean logo
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets[0] && settings) {
+        // Instantly update the UI state with the new image URI
+        setSettings({ ...settings, organizationLogo: result.assets[0].uri });
+      }
+    } catch (error) {
+      showAlert("Error", "Could not select the image.");
+    }
   };
 
   if (!settings) return null;
@@ -124,13 +145,17 @@ export default function SettingsScreen() {
         {/* --- THE STOREFRONT --- */}
         <Text style={styles.sectionTitle}>Buy More Scans</Text>
         <View style={styles.storeRow}>
+          {/* THE UPDATED 10 SCANS BUTTON */}
           <TouchableOpacity 
             onPress={() => handlePurchase('10_scans', 10)} 
             disabled={isProcessing}
             style={styles.storeBtn}
           >
             <Text style={styles.storeBtnTitle}>10 Scans</Text>
-            <Text style={styles.storeBtnPrice}>₹99</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
+              <Text style={{ fontSize: 14, fontWeight: '600', textDecorationLine: 'line-through', color: '#9CA3AF' }}>₹149</Text>
+              <Text style={{ fontSize: 28, fontWeight: '900', color: '#111' }}>₹99</Text>
+            </View>
           </TouchableOpacity>
 
           <TouchableOpacity 
@@ -140,9 +165,11 @@ export default function SettingsScreen() {
           >
             <View style={styles.popularBadge}><Text style={styles.popularText}>BEST VALUE</Text></View>
             <Text style={[styles.storeBtnTitle, {color:'white'}]}>50 Scans</Text>
-            <View style={styles.priceContainer}>
-              <Text style={[styles.storeBtnPriceStrikethrough, {color:'rgba(255,255,255,0.5)'}]}>₹499</Text>
-              <Text style={[styles.storeBtnPrice, {color:'rgba(255,255,255,0.8)'}]}>₹399</Text>
+            
+            {/* THE NEW ANCHOR PRICING LAYOUT */}
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <Text style={{ fontSize: 14, fontWeight: '600', textDecorationLine: 'line-through', color: 'rgba(255,255,255,0.6)' }}>₹499</Text>
+              <Text style={{ fontSize: 28, fontWeight: '900', color: 'white' }}>₹399</Text>
             </View>
           </TouchableOpacity>
         </View>
@@ -153,14 +180,15 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>Organization Profile</Text>
         <View style={styles.card}>
           <View style={styles.logoRow}>
-            <TouchableOpacity onPress={contactSupport} style={styles.logoCircle}>
+            {/* THE NEW UPLOAD TRIGGER */}
+            <TouchableOpacity onPress={handleLogoUpload} style={styles.logoCircle}>
               {settings.organizationLogo ? (
                 <Image source={{uri: settings.organizationLogo}} style={styles.logoImage} />
               ) : (
-                <Ionicons name="business" size={24} color="#9CA3AF" />
+                <Ionicons name="camera" size={24} color="#9CA3AF" />
               )}
-              <View style={styles.proBadge}><Text style={styles.proText}>PRO</Text></View>
             </TouchableOpacity>
+            
             <View style={{flex: 1}}>
               <Text style={styles.label}>ACADEMY / SCHOOL NAME</Text>
               <TextInput 
@@ -213,6 +241,8 @@ export default function SettingsScreen() {
         </View>
 
       </ScrollView>
+
+      <CustomAlert {...alertState} onClose={closeAlert} />
     </SafeAreaView>
   );
 }

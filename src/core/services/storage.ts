@@ -139,6 +139,7 @@ export interface AppSettings {
   proLicenseKey?: string;
   isPro?: boolean;
   scanTokens?: number;
+  hasSeenOnboarding?: boolean;
 }
 
 const SETTINGS_FILE = FileSystem.documentDirectory + 'app_settings.json';

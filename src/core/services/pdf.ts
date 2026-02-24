@@ -1,6 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { Section, ExamHeader, Question } from './storage';
+import { Section, ExamHeader, Question, getAppSettings } from './storage';
 
 // ============================================================
 // LATEX-TO-HTML PRE-PROCESSOR
@@ -217,6 +217,21 @@ export const generateExamHtml = async (
   sections: Section[],
   fontTheme: 'inter' | 'times' | 'bookman' | 'calibri' | 'arial' | 'garamond' | string
 ) => {
+  // --- ADD THIS BLOCK TO FETCH THE LOGO ---
+  const settings = await getAppSettings();
+  let logoBase64 = '';
+  if (settings?.organizationLogo) {
+    try {
+      const b64 = await FileSystem.readAsStringAsync(settings.organizationLogo, { encoding: 'base64' });
+      // Identify if it's a png or jpeg based on the uri extension
+      const ext = settings.organizationLogo.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
+      logoBase64 = `data:image/${ext};base64,${b64}`;
+    } catch (e) {
+      console.warn("Could not load organization logo for PDF");
+    }
+  }
+  // ----------------------------------------
+
   // Replace your existing formatter with this:
   const formatRichText = (text: string) => {
     if (!text) return "";
@@ -274,7 +289,11 @@ export const generateExamHtml = async (
           /* 2. BASE TYPOGRAPHY: Better line-height for readability */
           body { color: #111; background: white; font-size: 11pt; line-height: 1.45; }
 
-          .header { text-align: center; margin-bottom: 16pt; border-bottom: 2pt solid #111; padding-bottom: 12pt; }
+          /* --- REPLACE .header WITH THIS: --- */
+          .header-wrapper { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16pt; border-bottom: 2pt solid #111; padding-bottom: 12pt; }
+          .header-logo { width: 60px; max-height: 60px; object-fit: contain; }
+          .header-spacer { width: 60px; } /* Balances the flexbox so text stays perfectly centered */
+          .header-content { flex: 1; text-align: center; padding: 0 10px; }
           .school-name { font-size: 16pt; font-weight: 800; text-transform: uppercase; margin-bottom: 4pt; letter-spacing: 1px; }
           .exam-title { font-size: 13pt; font-weight: 500; margin-bottom: 6pt; color: #444; }
           .exam-class { font-size: 12pt; font-weight: 600; text-transform: uppercase; margin-bottom: 8pt; color: #555; }
@@ -314,14 +333,20 @@ export const generateExamHtml = async (
         </style>
       </head>
       <body>
-        <div class="header">
-          <div class="school-name">${latexToHtml(header.schoolName)}</div>
-          <div class="exam-title">${latexToHtml(header.title)}</div>
-          ${header.className ? `<div class="exam-class">${latexToHtml(header.className)}</div>` : ''}
-          <div class="meta-row">
-            <span>Duration: ${header.duration}</span>
-            <span>Max Marks: ${header.totalMarks}</span>
+        <div class="header-wrapper">
+          ${logoBase64 ? `<img src="${logoBase64}" class="header-logo" />` : `<div class="header-spacer"></div>`}
+          
+          <div class="header-content">
+            <div class="school-name">${latexToHtml(header.schoolName)}</div>
+            <div class="exam-title">${latexToHtml(header.title)}</div>
+            ${header.className ? `<div class="exam-class">${latexToHtml(header.className)}</div>` : ''}
+            <div class="meta-row">
+              <span>Duration: ${header.duration}</span>
+              <span>Max Marks: ${header.totalMarks}</span>
+            </div>
           </div>
+          
+          <div class="header-spacer"></div> 
         </div>
 
         ${header.instructions ? `<div class="instructions"><strong>INSTRUCTIONS:</strong><br/>${latexToHtml(header.instructions).replace(/\n/g, '<br/>')}</div>` : ''}

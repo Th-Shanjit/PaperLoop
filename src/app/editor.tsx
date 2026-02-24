@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
 import { 
   View, Text, TextInput, TouchableOpacity, FlatList, Image,
-  StyleSheet, StatusBar, Alert, KeyboardAvoidingView, Platform, Switch, ActivityIndicator, Modal 
+  StyleSheet, StatusBar, Alert, KeyboardAvoidingView, Platform, Switch, ActivityIndicator, Modal, ScrollView
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
@@ -18,6 +18,8 @@ import { transcribeHandwriting, transcribeFormulaSnippet } from '../core/service
 import { saveProject, getProject, ExamProject, Section, Question, checkScanEligibility, deductScanToken, purchaseTokens, getAppSettings } from '../core/services/storage'; 
 import { generateExamHtml } from '../core/services/pdf';
 import * as Haptics from 'expo-haptics';
+import CustomAlert from '../components/CustomAlert';
+import { useCustomAlert } from '../hooks/useCustomAlert';
 
 // --- HELPERS ---
 const LAYOUT_CYCLE: Record<string, '1-column' | '2-column' | '3-column'> = {
@@ -428,6 +430,7 @@ const SectionCard = memo(({
 export default function EditorScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const { alertState, showAlert, closeAlert } = useCustomAlert();
   const params = useLocalSearchParams(); 
   
   const projectId = Array.isArray(params.projectId) ? params.projectId[0] : params.projectId;
@@ -453,33 +456,18 @@ export default function EditorScreen() {
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkMoveMenu, setShowBulkMoveMenu] = useState(false);
+  const [showFormatGuide, setShowFormatGuide] = useState(false);
+  const [guideTab, setGuideTab] = useState<'format' | 'layout' | 'tools'>('format');
 
   // --- NEW: STOP LOSS STATE TRACKERS ---
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const latestState = useRef({ sections, header, fontTheme, currentProjectId });
 
-  // --- UNDO SYSTEM ---
-  const [undoStack, setUndoStack] = useState<Section[][]>([]);
-
-  // Safely push a snapshot of the exam to the history stack
-  const saveHistory = useCallback((currentSections: Section[]) => {
-    setUndoStack(prev => {
-      const newStack = [...prev, JSON.parse(JSON.stringify(currentSections))];
-      // Keep only the last 15 actions to prevent memory crashes
-      return newStack.length > 15 ? newStack.slice(newStack.length - 15) : newStack;
-    });
-  }, []);
-
-  const handleUndo = useCallback(() => {
-    if (undoStack.length === 0) return;
-    const previousState = undoStack[undoStack.length - 1];
-    setUndoStack(current => current.slice(0, -1));
-    setSections(previousState);
-    setHasUnsavedChanges(true);
-  }, [undoStack]);
 
   // Derived: lightweight section list for move-to-section picker
-  const sectionList = sections.map(s => ({ id: s.id, title: s.title }));
+  const sectionList = React.useMemo(() => 
+    sections.map(s => ({ id: s.id, title: s.title })), 
+  [sections.length, sections.map(s => s.title).join()]);
 
   // 1. Keep a reference of the absolute latest data so the "Save & Exit" button has the right data
   useEffect(() => {
@@ -496,7 +484,8 @@ export default function EditorScreen() {
       // Prevent the default behavior of leaving the screen
       e.preventDefault();
 
-      Alert.alert(
+      // THE FIX: Use your custom showAlert instead of Alert.alert
+      showAlert(
         "Save your progress?",
         "You have unsaved changes. Do you want to save them before leaving?",
         [
@@ -508,18 +497,17 @@ export default function EditorScreen() {
           },
           { 
             text: "Save & Exit", 
-            isPreferred: true,
+            style: "default", // This will make it your brand Blue
             onPress: async () => {
               const { sections: s, header: h, fontTheme: f, currentProjectId: id } = latestState.current;
               
-              // CHANGE THIS BLOCK:
               const project = {
                 id: id, title: h.title, updatedAt: Date.now(),
                 header: h, sections: s, 
-                settings: { fontTheme: f } // <-- REMOVED the old 'typewriter' hack
+                settings: { fontTheme: f } 
               };
               
-              await saveProject(project as any); // Added 'as any' to bypass strict Storage types for now
+              await saveProject(project as any); 
               navigation.dispatch(e.data.action);
             }
           }
@@ -581,7 +569,7 @@ export default function EditorScreen() {
             setSections([newSection]);
             saveToDrafts([newSection], newHeader, appDefaults.defaultFontTheme);
           }
-        } catch (e) { Alert.alert("Error", "Could not load scan data"); }
+        } catch (e) { showAlert("Error", "Could not load scan data"); }
       }
     };
     init();
@@ -604,7 +592,7 @@ export default function EditorScreen() {
     // THE PREMIUM FEEL: A light, satisfying vibration!
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     
-    Alert.alert("Saved", "Draft updated successfully.");
+    showAlert("Saved", "Draft updated successfully.");
   };
 
   const handleTogglePreview = async () => {
@@ -624,7 +612,7 @@ export default function EditorScreen() {
       const { uri } = await Print.printToFileAsync({ html, base64: false });
       setExportedPdfUri(uri);
       setShowExportMenu(true);
-    } catch (e) { Alert.alert("Export Failed", "Could not generate PDF."); }
+    } catch (e) { showAlert("Export Failed", "Could not generate PDF."); }
   };
 
   const handleDownload = async () => {
@@ -651,7 +639,7 @@ export default function EditorScreen() {
           await MediaLibrary.saveToLibraryAsync(appUri);
           setShowExportMenu(false);
           setExportedPdfUri(null);
-          Alert.alert("Success", "PDF saved to Downloads!");
+          showAlert("Success", "PDF saved to Downloads!");
         } else {
           // Permission denied, use share as fallback
           setShowExportMenu(false);
@@ -667,7 +655,7 @@ export default function EditorScreen() {
         await Sharing.shareAsync(appUri, { UTI: '.pdf', mimeType: 'application/pdf' });
       }
     } catch (e) {
-      Alert.alert("Download Failed", "Could not save PDF. Try Share instead.");
+      showAlert("Download Failed", "Could not save PDF. Try Share instead.");
     }
   };
 
@@ -693,57 +681,50 @@ export default function EditorScreen() {
       setShowExportMenu(false);
       setExportedPdfUri(null);
     } catch (e) {
-      Alert.alert("Share Failed", "Could not share PDF.");
+      showAlert("Share Failed", "Could not share PDF.");
     }
   };
 
-  const toggleSelectQuestion = (qId: string) => {
-    const newSelected = new Set(selectedIds);
-    if (newSelected.has(qId)) {
-      newSelected.delete(qId);
-    } else {
-      newSelected.add(qId);
-    }
-    setSelectedIds(newSelected);
-  };
+  const toggleSelectQuestion = useCallback((qId: string) => {
+    setSelectedIds(prev => {
+      const newSelected = new Set(prev);
+      if (newSelected.has(qId)) newSelected.delete(qId);
+      else newSelected.add(qId);
+      return newSelected;
+    });
+  }, []);
 
   // --- ACTIONS ---
-  const addSection = () => setSections(prev => { saveHistory(prev); return [...prev, { id: Date.now().toString(), title: "New Section", layout: '1-column', questions: [] }]; });
+  const addSection = () => setSections(prev => [...prev, { id: Date.now().toString(), title: "New Section", layout: '1-column', questions: [] }]);
   
   const updateSection = useCallback((id: string, field: keyof Section, value: any) => setSections(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s)), []);
   
-  const deleteSection = useCallback((id: string) => Alert.alert("Delete Section?", "Remove all questions?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => setSections(prev => { saveHistory(prev); return prev.filter(s => s.id !== id); }) }]), [saveHistory]);
+  const deleteSection = useCallback((id: string) => showAlert("Delete Section?", "Remove all questions?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => setSections(prev => prev.filter(s => s.id !== id)) }]), [showAlert]);
   
   const updateQ = useCallback((secId: string, qId: string, field: any, value: any) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: s.questions.map(q => q.id === qId ? { ...q, [field]: value } : q) } : s)), []);
   
   // THE NEW DELETE WITH CONFIRMATION
   const deleteQ = useCallback((secId: string, qId: string) => {
-    Alert.alert("Delete Question?", "Are you sure you want to remove this question?", [
+    showAlert("Delete Question?", "Are you sure you want to remove this question?", [
       { text: "Cancel", style: "cancel" },
       { text: "Delete", style: "destructive", onPress: () => {
-          setSections(prev => {
-            saveHistory(prev);
-            return prev.map(s => s.id === secId ? { ...s, questions: s.questions.filter(q => q.id !== qId) } : s);
-          });
+          setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: s.questions.filter(q => q.id !== qId) } : s));
       }}
     ]);
-  }, [saveHistory]);
+  }, [showAlert]);
 
-  const addQ = (secId: string) => setSections(prev => { saveHistory(prev); return prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, { id: Date.now().toString(), number: "", text: "", marks: "", type: 'standard', options:["","","",""] }] } : s); });
+  const addQ = useCallback((secId: string) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, { id: Date.now().toString(), number: "", text: "", marks: "", type: 'standard', options:["","","",""] }] } : s)), []);
   
   const moveQ = useCallback((secId: string, idx: number, dir: 'up' | 'down') => {
-    setSections(prev => {
-      saveHistory(prev);
-      return prev.map(s => {
-        if (s.id !== secId) return s;
-        const qs = [...s.questions];
-        if ((dir === 'up' && idx === 0) || (dir === 'down' && idx === qs.length - 1)) return s;
-        const target = dir === 'up' ? idx - 1 : idx + 1;
-        [qs[idx], qs[target]] = [qs[target], qs[idx]];
-        return { ...s, questions: qs };
-      });
-    });
-  }, [saveHistory]);
+    setSections(prev => prev.map(s => {
+      if (s.id !== secId) return s;
+      const qs = [...s.questions];
+      if ((dir === 'up' && idx === 0) || (dir === 'down' && idx === qs.length - 1)) return s;
+      const target = dir === 'up' ? idx - 1 : idx + 1;
+      [qs[idx], qs[target]] = [qs[target], qs[idx]];
+      return { ...s, questions: qs };
+    }));
+  }, []);
 
   // MOVE QUESTION BETWEEN SECTIONS
   const moveToSection = useCallback((fromSecId: string, qId: string, toSecId: string) => {
@@ -784,7 +765,7 @@ export default function EditorScreen() {
   };
   
   // NATIVE CROP HANDLER
-  const handlePickDiagram = async (secId: string, qId: string) => {
+  const handlePickDiagram = useCallback(async (secId: string, qId: string) => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -795,9 +776,9 @@ export default function EditorScreen() {
         updateQ(secId, qId, 'diagramUri', result.assets[0].uri);
       }
     } catch (e) {
-      Alert.alert("Error", "Could not pick image.");
+      showAlert("Error", "Could not pick image.");
     }
-  };
+  }, [updateQ, showAlert]);
 
   // NEW: The Fairness Engine Scanner
   const processPageScan = async (secId: string, result: ImagePicker.ImagePickerResult, isRescan: boolean = false) => {
@@ -815,13 +796,13 @@ export default function EditorScreen() {
 
         // Rule 1: Zero Questions Found (Total Failure)
         if (newQuestions.length === 0) {
-          Alert.alert("Scan Failed", "We couldn't detect any questions on this page. Please try taking a brighter photo.\n\n(No scan token was deducted).");
+          showAlert("Scan Failed", "We couldn't detect any questions on this page. Please try taking a brighter photo.\n\n(No scan token was deducted).");
           return;
         }
 
         // Rule 2: Low Yield (1 or 2 questions)
         if (newQuestions.length <= 2 && !isRescan) {
-          Alert.alert(
+          showAlert(
             "Low Questions Detected", 
             `We only found ${newQuestions.length} question(s). Do you want to keep this (Costs 1 Token) or discard and try again (Free)?`,
             [
@@ -853,32 +834,48 @@ export default function EditorScreen() {
         }));
 
       } catch (e) { 
-        Alert.alert("Error", "Scan completely failed. No tokens were deducted."); 
+        showAlert("Error", "Scan completely failed. No tokens were deducted."); 
       } finally { 
         setScanStatus(''); 
       }
     }
   };
 
-  const handleScanToSection = async (secId: string) => {
+  const handleScanToSection = useCallback(async (secId: string) => {
     const canScan = await checkScanEligibility();
     if (canScan) {
       setScanMenuConfig({ visible: true, sectionId: secId, isRescan: false });
     } else {
       setShowPaywall(true);
     }
-  };
+  }, []);
 
-  const handleRescanSection = (secId: string, currentRescans: number = 0) => {
+  const handleRescanSection = useCallback((secId: string, currentRescans: number = 0) => {
     if (currentRescans >= 2) {
-      Alert.alert("Free Rescans Exhausted", "You have used your 2 free rescans for this section. Scanning again will cost a regular token.", [
+      showAlert("Free Rescans Exhausted", "You have used your 2 free rescans for this section. Scanning again will cost a regular token.", [
         { text: "Cancel", style: "cancel" },
         { text: "Use Token", onPress: () => handleScanToSection(secId) }
       ]);
     } else {
       setScanMenuConfig({ visible: true, sectionId: secId, isRescan: true });
     }
-  };
+  }, [handleScanToSection, showAlert]);
+
+  const renderSectionItem = useCallback(({ item, index }: { item: Section, index: number }) => (
+    <SectionCard 
+        section={item} index={index} 
+        allSections={sectionList}
+        onUpdateSection={updateSection} onDeleteSection={deleteSection}
+        onUpdateQ={updateQ} onDeleteQ={deleteQ} onMoveQ={moveQ} onAddQ={addQ} onPasteScan={handleScanToSection}
+        onPickDiagram={handlePickDiagram}
+        onMoveToSection={moveToSection}
+        onRescanSection={handleRescanSection}
+        isSelectMode={isSelectMode}
+        selectedIds={selectedIds}
+        onToggleSelect={toggleSelectQuestion}
+    />
+  ), [sectionList, updateSection, deleteSection, updateQ, deleteQ, moveQ, addQ, handleScanToSection, handlePickDiagram, moveToSection, handleRescanSection, isSelectMode, selectedIds, toggleSelectQuestion]);
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#F3F4F6" />
@@ -886,15 +883,26 @@ export default function EditorScreen() {
       {/* HEADER NAV */}
       <View style={styles.nav}>
         {/* LEFT: Home Button */}
-        <View style={{ flex: 1, alignItems: 'flex-start' }}>
+        {/* Added pointerEvents="box-none" so the invisible flex space doesn't steal taps */}
+        <View style={{ flex: 1, alignItems: 'flex-start', zIndex: 10 }} pointerEvents="box-none">
           <TouchableOpacity onPress={() => router.replace('/')} style={styles.navBack}>
             <Ionicons name="home-outline" size={24} color="#111" />
           </TouchableOpacity>
         </View>
         
-        {/* CENTER: View Mode Toggle */}
-        <View style={{ flex: 1, alignItems: 'center' }}>
-          <View style={styles.toggleContainer}>
+        {/* CENTER: Bumped zIndex to 20 so it sits on top of the flex shields */}
+        {/* Added flexDirection row and gap to position the Guide button next to the toggle */}
+        <View style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', pointerEvents: 'box-none', zIndex: 20, gap: 12 }]}>
+          
+          {/* THE NEW MASTER GUIDE BUTTON */}
+          <TouchableOpacity 
+            onPress={() => setShowFormatGuide(true)} 
+            style={{ padding: 8, backgroundColor: '#EFF6FF', borderRadius: 20, pointerEvents: 'auto' }}
+          >
+            <Ionicons name="book-outline" size={20} color="#2563EB" />
+          </TouchableOpacity>
+
+          <View style={[styles.toggleContainer, { pointerEvents: 'auto' }]}>
              <TouchableOpacity onPress={handleTogglePreview} style={[styles.toggleBtn, viewMode === 'edit' && styles.toggleActive]}>
                 <Text style={[styles.toggleText, viewMode === 'edit' && styles.toggleTextActive]}>Edit</Text>
              </TouchableOpacity>
@@ -904,18 +912,9 @@ export default function EditorScreen() {
           </View>
         </View>
 
-        {/* RIGHT: Save & Select */}
-        <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
-          
-          {/* THE NEW UNDO BUTTON */}
-          <TouchableOpacity onPress={handleUndo} disabled={undoStack.length === 0} style={[styles.saveBtn, undoStack.length === 0 && {opacity: 0.5}]}>
-            <Ionicons name="arrow-undo-outline" size={20} color="#2563EB" />
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            onPress={() => { setIsSelectMode(!isSelectMode); setSelectedIds(new Set()); }} 
-            style={[styles.saveBtn, isSelectMode && {backgroundColor:'#2563EB'}]}
-          >
+        {/* RIGHT: Select & Save (Undo removed!) */}
+        <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 6, zIndex: 10 }} pointerEvents="box-none">
+          <TouchableOpacity onPress={() => { setIsSelectMode(!isSelectMode); setSelectedIds(new Set()); }} style={[styles.saveBtn, isSelectMode && {backgroundColor:'#2563EB'}]}>
             <Ionicons name="checkbox-outline" size={20} color={isSelectMode ? "white" : "#2563EB"} />
           </TouchableOpacity>
           <TouchableOpacity onPress={handleManualSave} style={styles.saveBtn} disabled={isSaving}>
@@ -928,24 +927,27 @@ export default function EditorScreen() {
       <View style={{ flex: 1 }}>
         {viewMode === 'edit' ? (
           // EDIT MODE
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+          <KeyboardAvoidingView 
+            behavior={Platform.OS === "ios" ? "padding" : undefined} 
+            keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0} 
+            style={{ flex: 1 }}
+          >
             <FlatList 
                 data={sections} 
                 keyExtractor={item => item.id} 
-                renderItem={({ item, index }) => (
-                    <SectionCard 
-                        section={item} index={index} 
-                        allSections={sectionList}
-                        onUpdateSection={updateSection} onDeleteSection={deleteSection}
-                        onUpdateQ={updateQ} onDeleteQ={deleteQ} onMoveQ={moveQ} onAddQ={addQ} onPasteScan={handleScanToSection}
-                        onPickDiagram={handlePickDiagram}
-                        onMoveToSection={moveToSection}
-                        onRescanSection={handleRescanSection}
-                        isSelectMode={isSelectMode}
-                        selectedIds={selectedIds}
-                        onToggleSelect={toggleSelectQuestion}
-                    />
-                )}
+                
+                // THE iOS MAGIC PROP
+                automaticallyAdjustKeyboardInsets={true} 
+                
+                // 1. USE THE NEW MEMOIZED RENDERER
+                renderItem={renderSectionItem}
+                
+                // 2. ADD THESE 4 PERFORMANCE PROPS
+                initialNumToRender={2}
+                maxToRenderPerBatch={3}
+                windowSize={5}
+                removeClippedSubviews={Platform.OS === 'android'}
+                
                 ListHeaderComponent={
                   <>
                     <HeaderEditor header={header} onChange={setHeader} />
@@ -1152,7 +1154,7 @@ export default function EditorScreen() {
                 if (Constants.appOwnership === 'expo') {
                   await purchaseTokens(10);
                   setShowPaywall(false);
-                  Alert.alert("Expo Go Mode", "Mock payment successful. Tokens added!");
+                  showAlert("Expo Go Mode", "Mock payment successful. Tokens added!");
                   return;
                 }
                 // ------------------
@@ -1171,13 +1173,13 @@ export default function EditorScreen() {
                     // 4. If payment succeeds, give them the tokens locally!
                     await purchaseTokens(10);
                     setShowPaywall(false);
-                    Alert.alert("Payment Successful!", "10 Scans have been added to your account.");
+                    showAlert("Payment Successful!", "10 Scans have been added to your account.");
                   } else {
-                    Alert.alert("Store Error", "Product not found. Please try again later.");
+                    showAlert("Store Error", "Product not found. Please try again later.");
                   }
                 } catch (e: any) {
                   if (!e.userCancelled) {
-                    Alert.alert("Payment Failed", e.message);
+                    showAlert("Payment Failed", e.message);
                   }
                 }
               }} style={styles.exportBtn}>
@@ -1192,7 +1194,7 @@ export default function EditorScreen() {
                 if (Constants.appOwnership === 'expo') {
                   await purchaseTokens(50);
                   setShowPaywall(false);
-                  Alert.alert("Expo Go Mode", "Mock payment successful. Tokens added!");
+                  showAlert("Expo Go Mode", "Mock payment successful. Tokens added!");
                   return;
                 }
                 // ------------------
@@ -1211,13 +1213,13 @@ export default function EditorScreen() {
                     // 4. If payment succeeds, give them the tokens locally!
                     await purchaseTokens(50);
                     setShowPaywall(false);
-                    Alert.alert("Payment Successful!", "50 Scans have been added to your account.");
+                    showAlert("Payment Successful!", "50 Scans have been added to your account.");
                   } else {
-                    Alert.alert("Store Error", "Product not found. Please try again later.");
+                    showAlert("Store Error", "Product not found. Please try again later.");
                   }
                 } catch (e: any) {
                   if (!e.userCancelled) {
-                    Alert.alert("Payment Failed", e.message);
+                    showAlert("Payment Failed", e.message);
                   }
                 }
               }} style={styles.exportBtn}>
@@ -1259,6 +1261,126 @@ export default function EditorScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* MASTER EDITOR GUIDE MODAL */}
+      <Modal visible={showFormatGuide} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.exportModal, { padding: 0, width: '90%', maxWidth: 420, overflow: 'hidden' }]}>
+            
+            {/* --- HEADER & TABS AREA --- */}
+            <View style={{ padding: 20, paddingBottom: 16, backgroundColor: '#EFF6FF', width: '100%', alignItems: 'center' }}>
+              <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16}}>
+                <Ionicons name="book" size={24} color="#2563EB" />
+                <Text style={[styles.exportTitle, {marginBottom: 0}]}>Editor Guide</Text>
+              </View>
+              
+              {/* Custom Segmented Control */}
+              <View style={{flexDirection: 'row', backgroundColor: '#DBEAFE', borderRadius: 10, padding: 4, width: '100%'}}>
+                {(['format', 'layout', 'tools'] as const).map(tab => (
+                  <TouchableOpacity 
+                    key={tab} 
+                    onPress={() => setGuideTab(tab)}
+                    style={{ flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, backgroundColor: guideTab === tab ? 'white' : 'transparent', shadowColor: guideTab === tab ? '#000' : 'transparent', shadowOpacity: 0.1, shadowRadius: 2, elevation: guideTab === tab ? 2 : 0 }}
+                  >
+                    <Text style={{fontSize: 13, fontWeight: guideTab === tab ? '700' : '600', color: guideTab === tab ? '#1D4ED8' : '#60A5FA', textTransform: 'capitalize'}}>
+                      {tab}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* --- CONTENT AREA --- */}
+            <ScrollView style={{width: '100%', maxHeight: 400}} contentContainerStyle={{padding: 24}}>
+              
+              {/* TAB 1: FORMATTING */}
+              {guideTab === 'format' && (
+                <View style={{gap: 12}}>
+                  <Text style={{fontSize: 14, color: '#6B7280', marginBottom: 12}}>Use these codes inside question boxes to style your text.</Text>
+                  
+                  <View style={styles.guideRow}>
+                    <View style={styles.guideCode}><Text style={styles.guideCodeText}>**text**</Text></View>
+                    <Ionicons name="arrow-forward" size={16} color="#D1D5DB" />
+                    <Text style={{fontSize: 15, fontWeight: 'bold', color: '#111'}}>Bold text</Text>
+                  </View>
+
+                  <View style={styles.guideRow}>
+                    <View style={styles.guideCode}><Text style={styles.guideCodeText}>*text*</Text></View>
+                    <Ionicons name="arrow-forward" size={16} color="#D1D5DB" />
+                    <Text style={{fontSize: 15, fontStyle: 'italic', color: '#111'}}>Italic text</Text>
+                  </View>
+
+                  <View style={styles.guideRow}>
+                    <View style={styles.guideCode}><Text style={styles.guideCodeText}>\ce{'{H2O}'}</Text></View>
+                    <Ionicons name="arrow-forward" size={16} color="#D1D5DB" />
+                    <Text style={{fontSize: 15, color: '#111', fontWeight: '600', letterSpacing: 0.5}}>H<Text style={{fontSize: 10, lineHeight: 18}}>2</Text>O</Text>
+                  </View>
+
+                  <View style={styles.guideRow}>
+                    <View style={styles.guideCode}><Text style={styles.guideCodeText}>___</Text></View>
+                    <Ionicons name="arrow-forward" size={16} color="#D1D5DB" />
+                    <Text style={{fontSize: 15, color: '#111'}}>Fill in the _______</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* TAB 2: LAYOUT */}
+              {guideTab === 'layout' && (
+                <View style={{gap: 20}}>
+                   <Text style={{fontSize: 14, color: '#6B7280', marginBottom: 4}}>Control how your PDF looks on paper.</Text>
+                   
+                   <View style={styles.guideFeatureRow}>
+                     <View style={[styles.layoutBadge, {backgroundColor: '#111'}]}><Text style={{color:'white', fontSize: 10, fontWeight: '700'}}>2 Col</Text></View>
+                     <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Multi-Column Layout</Text><Text style={styles.guideFeatureDesc}>Tap this badge on a Section Header to pack more questions onto a single page using 2 or 3 columns.</Text></View>
+                   </View>
+
+                   <View style={styles.guideFeatureRow}>
+                     <View style={[styles.dividerBadge, {backgroundColor: '#111'}]}><Ionicons name="remove" size={14} color="white"/></View>
+                     <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Section Dividers</Text><Text style={styles.guideFeatureDesc}>Tap the minus icon on a Section Header to draw a thick separator line above it.</Text></View>
+                   </View>
+
+                   <View style={styles.guideFeatureRow}>
+                     <View style={styles.typeBadgeInstr}><Text style={{color:'white', fontSize: 10, fontWeight: 'bold'}}>INSTR</Text></View>
+                     <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Subheadings</Text><Text style={styles.guideFeatureDesc}>Change a question type to 'INSTR'. It removes the number and spans across all columns like a title.</Text></View>
+                   </View>
+                </View>
+              )}
+
+              {/* TAB 3: TOOLS */}
+              {guideTab === 'tools' && (
+                <View style={{gap: 20}}>
+                  <Text style={{fontSize: 14, color: '#6B7280', marginBottom: 4}}>Advanced editing tools.</Text>
+                  
+                  <View style={styles.guideFeatureRow}>
+                    <View style={{backgroundColor: '#DBEAFE', padding: 6, borderRadius: 8}}><Ionicons name="refresh" size={16} color="#2563EB" /></View>
+                    <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Rescan to Section</Text><Text style={styles.guideFeatureDesc}>Forgot a page? Tap this on a section to scan and automatically inject more questions directly into it.</Text></View>
+                  </View>
+
+                  <View style={styles.guideFeatureRow}>
+                    <View style={{flexDirection: 'row', gap: 4}}>
+                      <View style={styles.sizeBadge}><Text style={styles.sizeText}>S</Text></View>
+                      <View style={[styles.sizeBadge, styles.sizeBadgeActive]}><Text style={styles.sizeTextActive}>M</Text></View>
+                    </View>
+                    <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Diagram Sizing</Text><Text style={styles.guideFeatureDesc}>Tap S/M/L on an image to control exactly how large the diagram prints on the final PDF.</Text></View>
+                  </View>
+
+                  <View style={styles.guideFeatureRow}>
+                    <View style={{backgroundColor: '#EFF6FF', padding: 6, borderRadius: 8}}><Ionicons name="swap-horizontal" size={16} color="#2563EB" /></View>
+                    <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Moving Questions</Text><Text style={styles.guideFeatureDesc}>Use the arrows to reorder questions, or the blue swap icon to instantly move a question to another Section.</Text></View>
+                  </View>
+                </View>
+              )}
+
+            </ScrollView>
+
+            <TouchableOpacity onPress={() => setShowFormatGuide(false)} style={[styles.exportBtn, {backgroundColor: '#2563EB', width: '90%', alignSelf: 'center', padding: 16, marginBottom: 20}]}>
+              <Text style={[styles.exportBtnText, {color: 'white', marginBottom: 0}]}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <CustomAlert {...alertState} onClose={closeAlert} />
     </SafeAreaView>
   );
 }
@@ -1460,4 +1582,14 @@ const styles = StyleSheet.create({
   formatToolbar: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 4, paddingHorizontal: 2 },
   formatBtn: { backgroundColor: '#F9FAFB', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 6, borderWidth: 1, borderColor: '#E5E7EB' },
   formatBtnText: { color: '#4B5563', fontSize: 13, fontWeight: '700' },
+
+  // --- Format Guide Styles ---
+  guideRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F9FAFB', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' },
+  guideCode: { backgroundColor: '#E5E7EB', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, minWidth: 80, alignItems: 'center' },
+  guideCodeText: { fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', fontSize: 13, color: '#4B5563', fontWeight: '700' },
+
+  // --- Editor Guide Styles ---
+  guideFeatureRow: { flexDirection: 'row', gap: 14, alignItems: 'flex-start' },
+  guideFeatureTitle: { fontSize: 15, fontWeight: '800', color: '#111', marginBottom: 4 },
+  guideFeatureDesc: { fontSize: 13, color: '#6B7280', lineHeight: 20 },
 });
