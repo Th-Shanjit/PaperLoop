@@ -206,14 +206,45 @@ const QuestionCard = memo(({
       
       {item.type === 'mcq' && !item.hideText && !isInstruction && (
         <View style={styles.mcqContainer}>
-          <View style={styles.mcqRow}>
-            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>A</Text><TextInput style={styles.mcqInput} placeholder="Option A" value={item.options?.[0]} onChangeText={t => updateOption(0, t)} editable={!isSelectMode}/></View>
-            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>B</Text><TextInput style={styles.mcqInput} placeholder="Option B" value={item.options?.[1]} onChangeText={t => updateOption(1, t)} editable={!isSelectMode}/></View>
-          </View>
-          <View style={styles.mcqRow}>
-            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>C</Text><TextInput style={styles.mcqInput} placeholder="Option C" value={item.options?.[2]} onChangeText={t => updateOption(2, t)} editable={!isSelectMode}/></View>
-            <View style={styles.mcqOption}><Text style={styles.mcqLabel}>D</Text><TextInput style={styles.mcqInput} placeholder="Option D" value={item.options?.[3]} onChangeText={t => updateOption(3, t)} editable={!isSelectMode}/></View>
-          </View>
+          {/* Dynamic Map over all options */}
+          {(item.options || ["", "", "", ""]).map((opt, idx) => (
+            <View key={idx} style={[styles.mcqOption, { marginBottom: 6, width: '100%' }]}>
+              <Text style={styles.mcqLabel}>{String.fromCharCode(65 + idx)}</Text>
+              <TextInput 
+                style={[styles.mcqInput, { minHeight: 30 }]} 
+                placeholder={`Option ${String.fromCharCode(65 + idx)}`} 
+                value={opt} 
+                onChangeText={t => updateOption(idx, t)} 
+                editable={!isSelectMode}
+                multiline
+              />
+              {/* DELETE OPTION BUTTON */}
+              {!isSelectMode && (
+                <TouchableOpacity onPress={() => {
+                  const newOptions = [...(item.options || ["", "", "", ""])];
+                  newOptions.splice(idx, 1);
+                  onUpdate(sectionId, item.id, 'options', newOptions);
+                }} style={{ padding: 8 }}>
+                  <Ionicons name="close" size={18} color="#9CA3AF" />
+                </TouchableOpacity>
+              )}
+            </View>
+          ))}
+          
+          {/* ADD OPTION BUTTON */}
+          {!isSelectMode && (
+             <TouchableOpacity 
+               onPress={() => {
+                 const newOptions = [...(item.options || ["", "", "", ""])];
+                 newOptions.push("");
+                 onUpdate(sectionId, item.id, 'options', newOptions);
+               }} 
+               style={styles.addOptionBtn}
+             >
+               <Ionicons name="add" size={16} color="#2563EB" />
+               <Text style={styles.addOptionText}>Add Option</Text>
+             </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -426,6 +457,26 @@ export default function EditorScreen() {
   // --- NEW: STOP LOSS STATE TRACKERS ---
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const latestState = useRef({ sections, header, fontTheme, currentProjectId });
+
+  // --- UNDO SYSTEM ---
+  const [undoStack, setUndoStack] = useState<Section[][]>([]);
+
+  // Safely push a snapshot of the exam to the history stack
+  const saveHistory = useCallback((currentSections: Section[]) => {
+    setUndoStack(prev => {
+      const newStack = [...prev, currentSections];
+      // Keep only the last 15 actions to prevent memory crashes
+      return newStack.length > 15 ? newStack.slice(newStack.length - 15) : newStack;
+    });
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    if (undoStack.length === 0) return;
+    const previousState = undoStack[undoStack.length - 1];
+    setUndoStack(current => current.slice(0, -1));
+    setSections(previousState);
+    setHasUnsavedChanges(true);
+  }, [undoStack]);
 
   // Derived: lightweight section list for move-to-section picker
   const sectionList = sections.map(s => ({ id: s.id, title: s.title }));
@@ -657,22 +708,42 @@ export default function EditorScreen() {
   };
 
   // --- ACTIONS ---
-  const addSection = () => setSections(prev => [...prev, { id: Date.now().toString(), title: "New Section", layout: '1-column', questions: [] }]);
+  const addSection = () => setSections(prev => { saveHistory(prev); return [...prev, { id: Date.now().toString(), title: "New Section", layout: '1-column', questions: [] }]; });
+  
   const updateSection = useCallback((id: string, field: keyof Section, value: any) => setSections(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s)), []);
-  const deleteSection = useCallback((id: string) => Alert.alert("Delete Section?", "Remove all questions?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => setSections(prev => prev.filter(s => s.id !== id)) }]), []);
+  
+  const deleteSection = useCallback((id: string) => Alert.alert("Delete Section?", "Remove all questions?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => setSections(prev => { saveHistory(prev); return prev.filter(s => s.id !== id); }) }]), [saveHistory]);
+  
   const updateQ = useCallback((secId: string, qId: string, field: any, value: any) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: s.questions.map(q => q.id === qId ? { ...q, [field]: value } : q) } : s)), []);
-  const deleteQ = useCallback((secId: string, qId: string) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: s.questions.filter(q => q.id !== qId) } : s)), []);
-  const addQ = (secId: string) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, { id: Date.now().toString(), number: "", text: "", marks: "", type: 'standard', options:["","","",""] }] } : s));
+  
+  // THE NEW DELETE WITH CONFIRMATION
+  const deleteQ = useCallback((secId: string, qId: string) => {
+    Alert.alert("Delete Question?", "Are you sure you want to remove this question?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => {
+          setSections(prev => {
+            saveHistory(prev);
+            return prev.map(s => s.id === secId ? { ...s, questions: s.questions.filter(q => q.id !== qId) } : s);
+          });
+      }}
+    ]);
+  }, [saveHistory]);
+
+  const addQ = (secId: string) => setSections(prev => { saveHistory(prev); return prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, { id: Date.now().toString(), number: "", text: "", marks: "", type: 'standard', options:["","","",""] }] } : s); });
+  
   const moveQ = useCallback((secId: string, idx: number, dir: 'up' | 'down') => {
-    setSections(prev => prev.map(s => {
-      if (s.id !== secId) return s;
-      const qs = [...s.questions];
-      if ((dir === 'up' && idx === 0) || (dir === 'down' && idx === qs.length - 1)) return s;
-      const target = dir === 'up' ? idx - 1 : idx + 1;
-      [qs[idx], qs[target]] = [qs[target], qs[idx]];
-      return { ...s, questions: qs };
-    }));
-  }, []);
+    setSections(prev => {
+      saveHistory(prev);
+      return prev.map(s => {
+        if (s.id !== secId) return s;
+        const qs = [...s.questions];
+        if ((dir === 'up' && idx === 0) || (dir === 'down' && idx === qs.length - 1)) return s;
+        const target = dir === 'up' ? idx - 1 : idx + 1;
+        [qs[idx], qs[target]] = [qs[target], qs[idx]];
+        return { ...s, questions: qs };
+      });
+    });
+  }, [saveHistory]);
 
   // MOVE QUESTION BETWEEN SECTIONS
   const moveToSection = useCallback((fromSecId: string, qId: string, toSecId: string) => {
@@ -835,6 +906,12 @@ export default function EditorScreen() {
 
         {/* RIGHT: Save & Select */}
         <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+          
+          {/* THE NEW UNDO BUTTON */}
+          <TouchableOpacity onPress={handleUndo} disabled={undoStack.length === 0} style={[styles.saveBtn, undoStack.length === 0 && {opacity: 0.5}]}>
+            <Ionicons name="arrow-undo-outline" size={20} color="#2563EB" />
+          </TouchableOpacity>
+
           <TouchableOpacity 
             onPress={() => { setIsSelectMode(!isSelectMode); setSelectedIds(new Set()); }} 
             style={[styles.saveBtn, isSelectMode && {backgroundColor:'#2563EB'}]}
@@ -1248,6 +1325,8 @@ const styles = StyleSheet.create({
   mcqOption: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderRadius: 8, paddingHorizontal: 8, borderWidth: 1, borderColor: '#F3F4F6' },
   mcqLabel: { fontWeight: '800', color: '#9CA3AF', marginRight: 6, fontSize: 12 },
   mcqInput: { flex: 1, paddingVertical: 8, fontSize: 13, color: '#374151' },
+  addOptionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4, padding: 4 },
+  addOptionText: { fontSize: 12, fontWeight: '600', color: '#2563EB' },
 
   // DIAGRAM CROP UI
   addDiagramBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderStyle: 'dashed', borderRadius: 8, padding: 12, marginTop: 8, marginBottom: 8 },

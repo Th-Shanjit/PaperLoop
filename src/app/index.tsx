@@ -148,11 +148,7 @@ export default function DashboardScreen() {
 
   const renderProject = ({ item }: { item: ExamProject }) => {
     const isSelected = selectedIds.has(item.id);
-    const qCount = getQuestionCount(item);
-    
-    // NEW: Math for the visual size meter (assuming 40 questions is a "Full" exam)
-    const fillPercent = Math.min(100, (qCount / 40) * 100);
-    const meterColor = qCount > 20 ? '#10B981' : qCount > 10 ? '#F59E0B' : '#3B82F6'; 
+    const qCount = getQuestionCount(item); 
 
     return (
       <TouchableOpacity 
@@ -180,9 +176,9 @@ export default function DashboardScreen() {
               {new Date(item.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} 
               {' • '} {qCount} Qs
             </Text>
-            {/* THE NEW VISUAL METER */}
-            <View style={styles.meterTrack}>
-              <View style={[styles.meterFill, { width: `${fillPercent}%`, backgroundColor: meterColor }]} />
+            {/* THE STATUS BADGE */}
+            <View style={{backgroundColor: '#F3F4F6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6}}>
+              <Text style={{fontSize: 10, fontWeight: '800', color: '#6B7280', letterSpacing: 0.5}}>DRAFT</Text>
             </View>
           </View>
         </View>
@@ -403,7 +399,4 @@ const styles = StyleSheet.create({
 
   searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 12, paddingHorizontal: 12, height: 44, borderWidth: 1, borderColor: '#E5E7EB' },
   searchInput: { flex: 1, marginLeft: 8, fontSize: 15, color: '#111827' },
-
-  meterTrack: { width: 50, height: 6, backgroundColor: '#E5E7EB', borderRadius: 3, overflow: 'hidden' },
-  meterFill: { height: '100%', borderRadius: 3 },
 });

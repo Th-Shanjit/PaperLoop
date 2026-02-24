@@ -304,7 +304,7 @@ export const generateExamHtml = async (
           .mcq-idx { font-weight: bold; margin-right: 6pt; }
 
           .diagram-wrapper { background: white; padding: 2pt; margin-top: 8pt; margin-bottom: 4pt; }
-          .diagram-img { display: block; max-width: 100%; max-height: 200px; object-fit: contain; }
+          .diagram-img { display: block; max-width: 100%; max-height: 200px; object-fit: contain; /* THE CAMSCANNER EFFECT: Black & White, High Contrast, Brighter Background */ filter: grayscale(100%) contrast(160%) brightness(110%); }
 
           sup { font-size: 0.75em; vertical-align: super; }
           sub { font-size: 0.75em; vertical-align: sub; }
