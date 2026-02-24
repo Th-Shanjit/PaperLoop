@@ -17,6 +17,7 @@ import Constants from 'expo-constants';
 import { transcribeHandwriting, transcribeFormulaSnippet } from '../core/services/gemini'; 
 import { saveProject, getProject, ExamProject, Section, Question, checkScanEligibility, deductScanToken, purchaseTokens, getAppSettings } from '../core/services/storage'; 
 import { generateExamHtml } from '../core/services/pdf';
+import * as Haptics from 'expo-haptics';
 
 // --- HELPERS ---
 const LAYOUT_CYCLE: Record<string, '1-column' | '2-column' | '3-column'> = {
@@ -548,6 +549,10 @@ export default function EditorScreen() {
     await saveToDrafts(sections, header, fontTheme);
     setIsSaving(false);
     setHasUnsavedChanges(false); // <-- Unlocks the exit door!
+    
+    // THE PREMIUM FEEL: A light, satisfying vibration!
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    
     Alert.alert("Saved", "Draft updated successfully.");
   };
 

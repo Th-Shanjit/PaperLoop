@@ -8,6 +8,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Haptics from 'expo-haptics';
 import { getSessionPages, removePageFromSession, updatePageInSession, swapPagesInSession, clearSession, ScannedPage, currentSessionPages } from '../core/store/session';
 import { transcribeHandwriting } from '../core/services/gemini';
 import { deductScanToken } from '../core/services/storage';
@@ -43,6 +44,7 @@ export default function WorkspaceScreen() {
   };
 
   const handleDeletePage = (index: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); // <--- Add this!
     removePageFromSession(index);
     setPages([...getSessionPages()]);
   };

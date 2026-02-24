@@ -149,7 +149,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   defaultInstructions: "1. All questions are compulsory.\n2. Draw diagrams where necessary.",
   defaultFontTheme: 'calibri',
   isPro: false,
-  scanTokens: 5
+  scanTokens: 3
 };
 
 export const getAppSettings = async (): Promise<AppSettings> => {
