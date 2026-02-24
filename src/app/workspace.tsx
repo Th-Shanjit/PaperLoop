@@ -12,9 +12,12 @@ import * as Haptics from 'expo-haptics';
 import { getSessionPages, removePageFromSession, updatePageInSession, swapPagesInSession, clearSession, ScannedPage, currentSessionPages } from '../core/store/session';
 import { transcribeHandwriting } from '../core/services/gemini';
 import { deductScanToken, getAppSettings } from '../core/services/storage';
+import CustomAlert from '../components/CustomAlert';
+import { useCustomAlert } from '../hooks/useCustomAlert';
 
 export default function WorkspaceScreen() {
   const router = useRouter();
+  const { alertState, showAlert, closeAlert } = useCustomAlert();
   const [pages, setPages] = useState<ScannedPage[]>([]);
   const [selectedImage, setSelectedImage] = useState<ScannedPage | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -40,7 +43,7 @@ export default function WorkspaceScreen() {
   };
 
   const handleExit = () => {
-    Alert.alert("Discard Scan?", "Going home will clear these pages.", [
+    showAlert("Discard Scan?", "Going home will clear these pages.", [
       { text: "Cancel", style: "cancel" },
       { text: "Discard", style: "destructive", onPress: () => {
         clearSession();
@@ -94,7 +97,7 @@ export default function WorkspaceScreen() {
     
     // If they aren't Pro, and they are trying to scan more pages than they can afford:
     if (!settings.isPro && pages.length > currentTokens) {
-      Alert.alert(
+      showAlert(
         "Not Enough Scans", 
         `You are trying to analyze ${pages.length} page(s), but you only have ${currentTokens} scan(s) left.\n\nPlease top up in the Settings menu or remove some pages.`,
         [{ text: "OK", style: "default" }]
@@ -184,10 +187,10 @@ export default function WorkspaceScreen() {
             }
             router.push({ pathname: "/editor", params: { initialData: JSON.stringify(processedQuestions) } });
           } else {
-            Alert.alert("Error", "No questions detected.");
+            showAlert("Error", "No questions detected.");
           }
         } catch (e) {
-          Alert.alert("Analysis Failed", "Please try again.");
+          showAlert("Analysis Failed", "Please try again.");
           console.error(e);
         } finally {
           setIsAnalyzing(false);
@@ -199,7 +202,7 @@ export default function WorkspaceScreen() {
 
       // Rule 1: Zero Questions Found (Total Failure)
       if (totalQuestions === 0) {
-        Alert.alert("Scan Failed", "We couldn't detect any questions on these pages. Please try taking brighter photos.\n\n(No scan tokens were deducted).");
+        showAlert("Scan Failed", "We couldn't detect any questions on these pages. Please try taking brighter photos.\n\n(No scan tokens were deducted).");
         setIsAnalyzing(false);
         setScanStatus('');
         return;
@@ -207,7 +210,7 @@ export default function WorkspaceScreen() {
 
       // Rule 2: Low Yield (<= 2 questions)
       if (totalQuestions <= 2) {
-        Alert.alert(
+        showAlert(
           "Low Questions Detected", 
           `We only found ${totalQuestions} question(s) across ${pages.length} page(s). Do you want to keep this (Costs ${pages.length} Token(s)) or discard and try again (Free)?`,
           [
@@ -228,7 +231,7 @@ export default function WorkspaceScreen() {
       await finishProcessing();
 
     } catch (e) {
-      Alert.alert("Analysis Failed", "Please try again.");
+      showAlert("Analysis Failed", "Please try again.");
       console.error(e);
       setIsAnalyzing(false);
       setScanStatus('');
@@ -408,6 +411,8 @@ export default function WorkspaceScreen() {
           </View>
         </View>
       )}
+
+      <CustomAlert {...alertState} onClose={closeAlert} />
     </SafeAreaView>
   );
 }

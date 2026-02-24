@@ -12,9 +12,12 @@ import { generateExamHtml } from '../core/services/pdf';
 import * as Print from 'expo-print';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
+import CustomAlert from '../components/CustomAlert';
+import { useCustomAlert } from '../hooks/useCustomAlert';
 
 export default function DashboardScreen() {
   const router = useRouter();
+  const { alertState, showAlert, closeAlert } = useCustomAlert();
   const [projects, setProjects] = useState<ExamProject[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
@@ -50,7 +53,7 @@ export default function DashboardScreen() {
   };
 
   const handleDelete = (id: string) => {
-    Alert.alert("Delete Draft?", "This action cannot be undone.", [
+    showAlert("Delete Draft?", "This action cannot be undone.", [
       { text: "Cancel", style: "cancel" },
       { 
         text: "Delete", 
@@ -75,7 +78,7 @@ export default function DashboardScreen() {
 
   const handleBulkDelete = () => {
     const count = selectedIds.size;
-    Alert.alert(`Delete ${count} drafts?`, "This action cannot be undone.", [
+    showAlert(`Delete ${count} drafts?`, "This action cannot be undone.", [
       { text: "Cancel", style: "cancel" },
       { 
         text: "Delete", 
@@ -103,7 +106,7 @@ export default function DashboardScreen() {
     try {
       const project = await getProject(projectId);
       if (!project) {
-        Alert.alert("Error", "Project not found");
+        showAlert("Error", "Project not found");
         setIsExporting(false);
         return;
       }
@@ -116,7 +119,7 @@ export default function DashboardScreen() {
         const { status } = await MediaLibrary.requestPermissionsAsync();
         if (status === 'granted') {
           await MediaLibrary.saveToLibraryAsync(uri);
-          Alert.alert("Success", "PDF saved to Downloads!");
+          showAlert("Success", "PDF saved to Downloads!");
         } else {
           // Permission denied, use share as fallback
           await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
@@ -126,7 +129,7 @@ export default function DashboardScreen() {
         await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
       }
     } catch (e) {
-      Alert.alert("Export Failed", "Could not generate PDF.");
+      showAlert("Export Failed", "Could not generate PDF.");
     } finally {
       setIsExporting(false);
     }
@@ -340,6 +343,7 @@ export default function DashboardScreen() {
         </View>
       )}
 
+      <CustomAlert {...alertState} onClose={closeAlert} />
     </SafeAreaView>
   );
 }
