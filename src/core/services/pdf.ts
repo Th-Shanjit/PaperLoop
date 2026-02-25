@@ -257,15 +257,9 @@ export const generateExamHtml = async (
   const fontImport = 
     fontTheme === 'times' 
     ? "body { font-family: 'Times New Roman', Times, serif; }"
-    : fontTheme === 'bookman'
-    ? "@import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;700&display=swap'); body { font-family: 'Lora', serif; }"
-    : fontTheme === 'calibri'
-    ? "body { font-family: Calibri, 'Segoe UI', Arial, sans-serif; }"
-    : fontTheme === 'arial'
-    ? "body { font-family: Arial, Helvetica, sans-serif; }"
-    : fontTheme === 'garamond'
-    ? "@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;700&display=swap'); body { font-family: 'EB Garamond', serif; }"
-    : "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'); body { font-family: 'Inter', sans-serif; }";
+    : fontTheme === 'typewriter'
+    ? "body { font-family: 'Courier New', Courier, monospace; }"
+    : "body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }"; // The 'Modern' default
 
   const getColumnCount = (layout: string) => {
     if (layout === '3-column') return 3;

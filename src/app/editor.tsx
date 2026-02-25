@@ -445,7 +445,7 @@ export default function EditorScreen() {
   });
   const [sections, setSections] = useState<Section[]>([]);
   // Change from the old 3 fonts to the new ones
-  const [fontTheme, setFontTheme] = useState<'inter' | 'times' | 'bookman' | 'calibri' | 'arial' | 'garamond'>('calibri');
+  const [fontTheme, setFontTheme] = useState<'modern' | 'times' | 'typewriter'>('modern');
   const [scanStatus, setScanStatus] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
   const [scanMenuConfig, setScanMenuConfig] = useState<{ visible: boolean, sectionId: string | null, isRescan: boolean }>({ visible: false, sectionId: null, isRescan: false });
@@ -1061,12 +1061,9 @@ export default function EditorScreen() {
            <View style={styles.menu}>
               <Text style={styles.menuTitle}>Font Theme</Text>
               {[
-                { id: 'calibri', label: 'Calibri (Modern)' },
+                { id: 'modern', label: 'Modern (Sans-Serif)' },
                 { id: 'times', label: 'Times New Roman' },
-                { id: 'bookman', label: 'Bookman Old Style' },
-                { id: 'arial', label: 'Arial' },
-                { id: 'garamond', label: 'Garamond (Classic)' },
-                { id: 'inter', label: 'Inter (Clean)' }
+                { id: 'typewriter', label: 'Typewriter' }
               ].map((f) => (
                 <TouchableOpacity key={f.id} style={styles.menuItem} onPress={() => { setFontTheme(f.id as any); setShowSettings(false); }}>
                   <Text style={styles.menuText}>{f.label}</Text>
