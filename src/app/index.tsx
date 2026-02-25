@@ -10,8 +10,9 @@ import Constants from 'expo-constants';
 import { loadProjects, deleteProject, ExamProject, getProject, getAppSettings, saveAppSettings } from '../core/services/storage';
 import { generateExamHtml } from '../core/services/pdf';
 import * as Print from 'expo-print';
-import * as MediaLibrary from 'expo-media-library';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import { Platform } from 'react-native';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 import OnboardingModal from '../components/OnboardingModal';
@@ -129,20 +130,32 @@ export default function DashboardScreen() {
       const html = await generateExamHtml(project.header, project.sections || [], project.settings?.fontTheme || 'modern');
       const { uri } = await Print.printToFileAsync({ html, base64: false });
       
-      // Try to save to MediaLibrary first
-      try {
-        const { status } = await MediaLibrary.requestPermissionsAsync();
-        if (status === 'granted') {
-          await MediaLibrary.saveToLibraryAsync(uri);
-          showAlert("Success", "PDF saved to Downloads!");
-        } else {
-          // Permission denied, use share as fallback
-          await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      const cleanTitle = (project.header.title || 'Exam').trim().replace(/[^a-z0-9 \-]/gi, '');
+      const cleanSubject = (project.header.className || 'Subject').trim().replace(/[^a-z0-9 \-]/gi, '');
+      const dateStr = new Date().toISOString().split('T')[0];
+      const fileName = `${cleanSubject} - ${cleanTitle} - ${dateStr}.pdf`;
+
+      // --- THE ANDROID PDF FIX ---
+      if (Platform.OS === 'android') {
+        try {
+          const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+          if (permissions.granted) {
+            const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+            const createdUri = await FileSystem.StorageAccessFramework.createFileAsync(permissions.directoryUri, fileName, 'application/pdf');
+            await FileSystem.writeAsStringAsync(createdUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+            
+            showAlert("Success", "PDF saved successfully!");
+            setIsExporting(false);
+            return;
+          }
+        } catch (e) {
+          console.warn("SAF Error:", e);
         }
-      } catch (mediaError) {
-        // MediaLibrary failed (e.g., Expo Go limitations), use share as fallback
-        await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
       }
+
+      // iOS Fallback (or if Android user canceled the folder selection)
+      await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      
     } catch (e) {
       showAlert("Export Failed", "Could not generate PDF.");
     } finally {

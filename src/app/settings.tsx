@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import Purchases from 'react-native-purchases';
 import Constants from 'expo-constants';
 import { getAppSettings, saveAppSettings, AppSettings, clearImageCache, purchaseTokens } from '../core/services/storage';
@@ -78,8 +79,8 @@ export default function SettingsScreen() {
   };
 
   const contactSupport = () => {
-    // Replace with your actual number and country code (e.g., 919876543210 for India)
-    const phoneNumber = "+91 6290739163"; 
+    // THE FIX: Only raw digits. No plus signs, no spaces, no brackets.
+    const phoneNumber = "916290739163"; 
     const message = "Hi PaperLoop Support, I need help with...";
     
     // This creates the deep link that forces the phone to open WhatsApp directly
@@ -88,7 +89,7 @@ export default function SettingsScreen() {
     Linking.canOpenURL(url)
       .then(supported => {
         if (!supported) {
-          showAlert("WhatsApp Not Found", "Please install WhatsApp to contact support, or email us directly.");
+          showAlert("WhatsApp Not Found", "Please install WhatsApp to contact support.");
         } else {
           return Linking.openURL(url);
         }
@@ -106,8 +107,22 @@ export default function SettingsScreen() {
       });
 
       if (!result.canceled && result.assets && result.assets[0] && settings) {
-        // Instantly update the UI state with the new image URI
-        setSettings({ ...settings, organizationLogo: result.assets[0].uri });
+        // THE FIX: Move it to permanent storage
+        const sourceUri = result.assets[0].uri;
+        const filename = sourceUri.split('/').pop();
+        if (!FileSystem.documentDirectory || !filename) {
+          showAlert("Error", "Could not process the image.");
+          return;
+        }
+        const permanentUri = FileSystem.documentDirectory + filename;
+        
+        await FileSystem.copyAsync({
+          from: sourceUri,
+          to: permanentUri
+        });
+
+        // Save the permanent URI instead of the temporary one
+        setSettings({ ...settings, organizationLogo: permanentUri });
       }
     } catch (error) {
       showAlert("Error", "Could not select the image.");
@@ -231,12 +246,32 @@ export default function SettingsScreen() {
             <Ionicons name="chevron-forward" size={16} color="#ccc" />
           </TouchableOpacity>
           <View style={styles.divider} />
+          
           <TouchableOpacity style={styles.actionRow} onPress={contactSupport}>
             <View style={styles.actionLeft}>
               <Ionicons name="logo-whatsapp" size={20} color="#16A34A" />
               <Text style={styles.actionText}>Contact Support</Text>
             </View>
             <Ionicons name="chevron-forward" size={16} color="#ccc" />
+          </TouchableOpacity>
+          <View style={styles.divider} />
+
+          {/* THE NEW LEGAL LINKS */}
+          <TouchableOpacity style={styles.actionRow} onPress={() => Linking.openURL('https://yourwebsite.com/privacy')}>
+            <View style={styles.actionLeft}>
+              <Ionicons name="shield-checkmark-outline" size={20} color="#6B7280" />
+              <Text style={styles.actionText}>Privacy Policy</Text>
+            </View>
+            <Ionicons name="open-outline" size={16} color="#ccc" />
+          </TouchableOpacity>
+          <View style={styles.divider} />
+          
+          <TouchableOpacity style={styles.actionRow} onPress={() => Linking.openURL('https://yourwebsite.com/terms')}>
+            <View style={styles.actionLeft}>
+              <Ionicons name="document-text-outline" size={20} color="#6B7280" />
+              <Text style={styles.actionText}>Terms of Service</Text>
+            </View>
+            <Ionicons name="open-outline" size={16} color="#ccc" />
           </TouchableOpacity>
         </View>
 

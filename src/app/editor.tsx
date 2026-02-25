@@ -36,14 +36,14 @@ const LAYOUT_LABEL: Record<string, string> = {
 // --- SUB-COMPONENTS ---
 const HeaderEditor = memo(({ header, onChange }: { header: any, onChange: (h: any) => void }) => (
   <View style={styles.headerCard}>
-    <TextInput style={styles.schoolInput} value={header.schoolName} onChangeText={t => onChange({...header, schoolName: t})} placeholder="SCHOOL NAME" />
-    <TextInput style={styles.titleInput} value={header.title} onChangeText={t => onChange({...header, title: t})} placeholder="EXAM TITLE" />
-    <TextInput style={styles.classInput} value={header.className} onChangeText={t => onChange({...header, className: t})} placeholder="Subject / Class (e.g., Physics XII-A)" />
+    <TextInput style={styles.schoolInput} value={header.schoolName} onChangeText={t => onChange({...header, schoolName: t})} placeholder="SCHOOL NAME" placeholderTextColor="#9CA3AF" />
+    <TextInput style={styles.titleInput} value={header.title} onChangeText={t => onChange({...header, title: t})} placeholder="EXAM TITLE" placeholderTextColor="#9CA3AF" />
+    <TextInput style={styles.classInput} value={header.className} onChangeText={t => onChange({...header, className: t})} placeholder="Subject / Class (e.g., Physics XII-A)" placeholderTextColor="#9CA3AF" />
     <View style={styles.metaRow}>
-      <View style={styles.metaBox}><Text style={styles.label}>DURATION</Text><TextInput style={styles.metaInput} value={header.duration} onChangeText={t => onChange({...header, duration: t})} /></View>
-      <View style={styles.metaBox}><Text style={styles.label}>MARKS</Text><TextInput style={styles.metaInput} value={header.totalMarks} onChangeText={t => onChange({...header, totalMarks: t})} /></View>
+      <View style={styles.metaBox}><Text style={styles.label}>DURATION</Text><TextInput style={styles.metaInput} value={header.duration} onChangeText={t => onChange({...header, duration: t})} placeholder="e.g. 2 Hours" placeholderTextColor="#9CA3AF" /></View>
+      <View style={styles.metaBox}><Text style={styles.label}>MARKS</Text><TextInput style={styles.metaInput} value={header.totalMarks} onChangeText={t => onChange({...header, totalMarks: t})} placeholder="e.g. 100" placeholderTextColor="#9CA3AF" keyboardType="numeric" /></View>
     </View>
-    <View style={styles.instructionBox}><Text style={styles.label}>INSTRUCTIONS</Text><TextInput style={styles.instInput} value={header.instructions} onChangeText={t => onChange({...header, instructions: t})} multiline /></View>
+    <View style={styles.instructionBox}><Text style={styles.label}>INSTRUCTIONS</Text><TextInput style={styles.instInput} value={header.instructions} onChangeText={t => onChange({...header, instructions: t})} multiline placeholder="Enter instructions here..." placeholderTextColor="#9CA3AF" /></View>
   </View>
 ));
 
@@ -621,39 +621,41 @@ export default function EditorScreen() {
       // NEW STANDARDIZED NAMING CONVENTION
       const cleanTitle = (header.title || 'Exam').trim().replace(/[^a-z0-9 \-]/gi, '');
       const cleanSubject = (header.className || 'Subject').trim().replace(/[^a-z0-9 \-]/gi, '');
-      const dateStr = new Date().toISOString().split('T')[0]; // Creates YYYY-MM-DD
+      const dateStr = new Date().toISOString().split('T')[0]; 
       const fileName = `${cleanSubject} - ${cleanTitle} - ${dateStr}.pdf`;
       
-      // Save to app folder first
+      // Save to app internal folder first
       const docDir = FileSystem.documentDirectory + 'exams/';
       const dirInfo = await FileSystem.getInfoAsync(docDir);
       if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(docDir, { intermediates: true });
       const appUri = docDir + fileName;
       await FileSystem.copyAsync({ from: exportedPdfUri, to: appUri });
       
-      // Try to save to MediaLibrary
-      try {
-        const { status } = await MediaLibrary.requestPermissionsAsync();
-        if (status === 'granted') {
-          // FIX: Save the cleanly named appUri, NOT the gibberish exportedPdfUri!
-          await MediaLibrary.saveToLibraryAsync(appUri);
-          setShowExportMenu(false);
-          setExportedPdfUri(null);
-          showAlert("Success", "PDF saved to Downloads!");
-        } else {
-          // Permission denied, use share as fallback
-          setShowExportMenu(false);
-          setExportedPdfUri(null);
-          // FIX: Share the cleanly named appUri!
-          await Sharing.shareAsync(appUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      // --- THE ANDROID PDF FIX ---
+      if (Platform.OS === 'android') {
+        try {
+          // This opens the native Android file picker so the user can choose where to save it
+          const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+          if (permissions.granted) {
+            const base64 = await FileSystem.readAsStringAsync(appUri, { encoding: FileSystem.EncodingType.Base64 });
+            const createdUri = await FileSystem.StorageAccessFramework.createFileAsync(permissions.directoryUri, fileName, 'application/pdf');
+            await FileSystem.writeAsStringAsync(createdUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+            
+            setShowExportMenu(false);
+            setExportedPdfUri(null);
+            showAlert("Success", "PDF saved to your folder!");
+            return;
+          }
+        } catch (e) {
+          console.warn("SAF Error:", e);
         }
-      } catch (mediaError) {
-        // MediaLibrary failed (e.g., Expo Go limitations), use share as fallback
-        setShowExportMenu(false);
-        setExportedPdfUri(null);
-        // FIX: Share the cleanly named appUri!
-        await Sharing.shareAsync(appUri, { UTI: '.pdf', mimeType: 'application/pdf' });
       }
+
+      // iOS Fallback (or if Android user canceled the folder selection)
+      setShowExportMenu(false);
+      setExportedPdfUri(null);
+      await Sharing.shareAsync(appUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      
     } catch (e) {
       showAlert("Download Failed", "Could not save PDF. Try Share instead.");
     }
@@ -1373,8 +1375,9 @@ export default function EditorScreen() {
 
             </ScrollView>
 
-            <TouchableOpacity onPress={() => setShowFormatGuide(false)} style={[styles.exportBtn, {backgroundColor: '#2563EB', width: '90%', alignSelf: 'center', padding: 16, marginBottom: 20}]}>
-              <Text style={[styles.exportBtnText, {color: 'white', marginBottom: 0}]}>Got it</Text>
+            {/* THE FIXED "GOT IT" BUTTON */}
+            <TouchableOpacity onPress={() => setShowFormatGuide(false)} style={[styles.exportBtn, {backgroundColor: '#2563EB', width: '90%', alignSelf: 'center', padding: 16, marginBottom: 20, alignItems: 'center', justifyContent: 'center'}]}>
+              <Text style={{color: 'white', fontSize: 16, fontWeight: 'bold'}}>Got it</Text>
             </TouchableOpacity>
           </View>
         </View>
