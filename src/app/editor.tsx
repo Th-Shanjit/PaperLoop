@@ -1372,9 +1372,21 @@ export default function EditorScreen() {
 
             </ScrollView>
 
-            {/* THE FIXED "GOT IT" BUTTON */}
-            <TouchableOpacity onPress={() => setShowFormatGuide(false)} style={[styles.exportBtn, {backgroundColor: '#2563EB', width: '90%', alignSelf: 'center', padding: 16, marginBottom: 20, alignItems: 'center', justifyContent: 'center'}]}>
-              <Text style={{color: 'white', fontSize: 16, fontWeight: 'bold'}}>Got it</Text>
+            {/* THE TRULY FIXED "GOT IT" BUTTON */}
+            <TouchableOpacity 
+              onPress={() => setShowFormatGuide(false)} 
+              style={{
+                backgroundColor: '#2563EB', 
+                width: '90%', 
+                alignSelf: 'center', 
+                paddingVertical: 16, 
+                borderRadius: 16, 
+                marginBottom: 20, 
+                alignItems: 'center', 
+                justifyContent: 'center'
+              }}
+            >
+              <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>Got it</Text>
             </TouchableOpacity>
           </View>
         </View>
