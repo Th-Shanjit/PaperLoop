@@ -55,7 +55,7 @@ const QuestionCard = memo(({
   allSections: { id: string; title: string }[],
   onUpdate: (sId: string, qId: string, field: keyof Question, val: any) => void,
   onDelete: (sId: string, qId: string) => void,
-  onMove: (sId: string, idx: number, dir: 'up' | 'down') => void,
+  onMove: (sId: string, qId: string, dir: 'up' | 'down') => void,
   onPickDiagram: (sId: string, qId: string) => void,
   onMoveToSection: (fromSecId: string, qId: string, toSecId: string) => void,
   isSelectMode: boolean, isSelected: boolean, onToggleSelect: (qId: string) => void
@@ -153,8 +153,8 @@ const QuestionCard = memo(({
 
         {!isSelectMode && (
           <View style={styles.toolRow}>
-            <TouchableOpacity onPress={() => onMove(sectionId, parseInt(item.number)-1, 'up')} style={styles.toolBtn}><Ionicons name="arrow-up" size={16} color="#555" /></TouchableOpacity>
-            <TouchableOpacity onPress={() => onMove(sectionId, parseInt(item.number)-1, 'down')} style={styles.toolBtn}><Ionicons name="arrow-down" size={16} color="#555" /></TouchableOpacity>
+            <TouchableOpacity onPress={() => onMove(sectionId, item.id, 'up')} style={styles.toolBtn}><Ionicons name="arrow-up" size={16} color="#555" /></TouchableOpacity>
+            <TouchableOpacity onPress={() => onMove(sectionId, item.id, 'down')} style={styles.toolBtn}><Ionicons name="arrow-down" size={16} color="#555" /></TouchableOpacity>
             {otherSections.length > 0 && (
               <TouchableOpacity onPress={() => setShowMoveMenu(true)} style={[styles.toolBtn, {backgroundColor:'#EFF6FF'}]}><Ionicons name="swap-horizontal" size={16} color="#2563EB" /></TouchableOpacity>
             )}
@@ -717,10 +717,12 @@ export default function EditorScreen() {
 
   const addQ = useCallback((secId: string) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: [...s.questions, { id: Date.now().toString(), number: "", text: "", marks: "", type: 'standard', options:["","","",""] }] } : s)), []);
   
-  const moveQ = useCallback((secId: string, idx: number, dir: 'up' | 'down') => {
+  const moveQ = useCallback((secId: string, qId: string, dir: 'up' | 'down') => {
     setSections(prev => prev.map(s => {
       if (s.id !== secId) return s;
       const qs = [...s.questions];
+      const idx = qs.findIndex(q => q.id === qId);
+      if (idx === -1) return s;
       if ((dir === 'up' && idx === 0) || (dir === 'down' && idx === qs.length - 1)) return s;
       const target = dir === 'up' ? idx - 1 : idx + 1;
       [qs[idx], qs[target]] = [qs[target], qs[idx]];

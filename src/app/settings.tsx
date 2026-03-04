@@ -162,7 +162,7 @@ export default function SettingsScreen() {
         <View style={styles.storeRow}>
           {/* THE UPDATED 10 SCANS BUTTON */}
           <TouchableOpacity 
-            onPress={() => handlePurchase('10_scans', 10)} 
+            onPress={() => handlePurchase('10_scans_pack', 10)} 
             disabled={isProcessing}
             style={styles.storeBtn}
           >
@@ -257,7 +257,7 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
 
           {/* THE NEW LEGAL LINKS */}
-          <TouchableOpacity style={styles.actionRow} onPress={() => Linking.openURL('https://yourwebsite.com/privacy')}>
+          <TouchableOpacity style={styles.actionRow} onPress={() => Linking.openURL('https://www.shanjitthokchom.xyz/docs/paperloopprivacy')}>
             <View style={styles.actionLeft}>
               <Ionicons name="shield-checkmark-outline" size={20} color="#6B7280" />
               <Text style={styles.actionText}>Privacy Policy</Text>
@@ -266,7 +266,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
           <View style={styles.divider} />
           
-          <TouchableOpacity style={styles.actionRow} onPress={() => Linking.openURL('https://yourwebsite.com/terms')}>
+          <TouchableOpacity style={styles.actionRow} onPress={() => Linking.openURL('https://www.shanjitthokchom.xyz/docs/termspaperloop')}>
             <View style={styles.actionLeft}>
               <Ionicons name="document-text-outline" size={20} color="#6B7280" />
               <Text style={styles.actionText}>Terms of Service</Text>
