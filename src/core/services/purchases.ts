@@ -4,14 +4,22 @@ import { Platform, Alert } from 'react-native';
 import { purchaseTokens, getAppSettings, saveAppSettings } from './storage';
 import Constants from 'expo-constants';
 
-const REVENUECAT_API_KEY = "test_KPNPqclgWpQjiqVJRTbNvnkiUqF";
+const API_KEYS = {
+  apple: "appl_YOUR_APPLE_KEY_HERE", // Replace when you deploy to iOS
+  google: "test_KPNPqclgWpQjiqVJRTbNvnkiUqF"
+};
 
 export const configurePurchases = () => {
   if (Constants.appOwnership === 'expo') {
     console.log("Running in Expo Go: Bypassing RevenueCat native setup.");
     return;
   }
-  Purchases.configure({ apiKey: REVENUECAT_API_KEY });
+  
+  if (Platform.OS === 'ios') {
+    Purchases.configure({ apiKey: API_KEYS.apple });
+  } else if (Platform.OS === 'android') {
+    Purchases.configure({ apiKey: API_KEYS.google });
+  }
 };
 
 /**
