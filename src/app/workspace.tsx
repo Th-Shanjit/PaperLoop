@@ -45,16 +45,16 @@ export default function WorkspaceScreen() {
   const handleExit = () => {
     showAlert("Discard Scan?", "Going home will clear these pages.", [
       { text: "Cancel", style: "cancel" },
-      { text: "Discard", style: "destructive", onPress: () => {
-        clearSession();
+      { text: "Discard", style: "destructive", onPress: async () => {
+        await clearSession();
         router.replace("/");
       }}
     ]);
   };
 
-  const handleDeletePage = (index: number) => {
+  const handleDeletePage = async (index: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); // <--- Add this!
-    removePageFromSession(index);
+    await removePageFromSession(index);
     setPages([...getSessionPages()]);
   };
 
@@ -159,7 +159,7 @@ export default function WorkspaceScreen() {
                   
                   const permanentUri = diagDir + `diagram_${Date.now()}_${qIndex}.png`;
                   await FileSystem.copyAsync({ from: cropResult.uri, to: permanentUri });
-                  finalQ.diagramUri = permanentUri;
+                  finalQ.localUri = permanentUri;
                 }
               } catch (e) { console.error("❌ Crop Failed for Q" + (qIndex + 1), e); }
             }
@@ -242,7 +242,7 @@ export default function WorkspaceScreen() {
     <View style={styles.card}>
       <TouchableOpacity onPress={() => setSelectedImage(item)} style={styles.cardImageContainer}>
         <Image 
-          source={{ uri: item.uri }} 
+          source={{ uri: item.localUri }} 
           style={[styles.thumbnail, { transform: [{ rotate: `${item.rotation}deg` }] }]} 
         />
       </TouchableOpacity>
@@ -278,56 +278,83 @@ export default function WorkspaceScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#F3F4F6" />
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleExit} style={styles.backBtn}>
-          <Ionicons name="close" size={24} color="#1F2937" />
-          <Text style={styles.backText}>Discard</Text>
-        </TouchableOpacity>
+        {pages.length > 0 ? (
+          <TouchableOpacity onPress={handleExit} style={styles.backBtn}>
+            <Ionicons name="close" size={24} color="#1F2937" />
+            <Text style={styles.backText}>Discard</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity onPress={() => router.replace("/")} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={24} color="#1F2937" />
+            <Text style={styles.backText}>Back</Text>
+          </TouchableOpacity>
+        )}
         <View style={{alignItems:'center'}}>
-          <Text style={styles.headerTitle}>Review Pages</Text>
-          <Text style={styles.headerSub}>{pages.length} scanned</Text>
+          <Text style={styles.headerTitle}>Workspace</Text>
+          {pages.length > 0 && <Text style={styles.headerSub}>{pages.length} scanned</Text>}
         </View>
-        <View style={{width:60}} />
+        <View style={{width:80}} />
       </View>
 
       {pages.length === 0 ? (
-        <View style={styles.emptyState}>
-          <TouchableOpacity onPress={handleOpenScanner} style={styles.emptyIconCircle}>
-            <Ionicons name="camera-outline" size={40} color="#9CA3AF" />
+        <View style={styles.emptyStateContainer}>
+          <Text style={styles.emptyStateHeading}>Create New Exam</Text>
+          <Text style={styles.emptyStateSub}>Choose how you want to start</Text>
+
+          <TouchableOpacity onPress={handleOpenScanner} style={styles.actionCard}>
+            <View style={[styles.actionIconBg, { backgroundColor: '#EFF6FF' }]}>
+              <Ionicons name="scan" size={32} color="#2563EB" />
+            </View>
+            <View style={styles.actionTextContent}>
+              <Text style={styles.actionTitle}>Scan a Worksheet</Text>
+              <Text style={styles.actionDesc}>Use camera or gallery to AI-digitize</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={24} color="#D1D5DB" />
           </TouchableOpacity>
-          <Text style={styles.emptyTitle}>No pages yet</Text>
+
+          <TouchableOpacity onPress={() => router.push({ pathname: "/editor", params: { initialData: JSON.stringify([]) } })} style={styles.actionCard}>
+            <View style={[styles.actionIconBg, { backgroundColor: '#F3F4F6' }]}>
+              <Ionicons name="document-text" size={32} color="#4B5563" />
+            </View>
+            <View style={styles.actionTextContent}>
+              <Text style={styles.actionTitle}>Start Blank Exam</Text>
+              <Text style={styles.actionDesc}>Create from scratch using the editor</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={24} color="#D1D5DB" />
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
           data={pages}
           renderItem={renderItem}
-          keyExtractor={(item, index) => `${index}-${item.uri}`} 
+          keyExtractor={(item, index) => `${index}-${item.localUri}`} 
           contentContainerStyle={styles.grid}
           showsVerticalScrollIndicator={false}
         />
       )}
 
-      <View style={styles.fabContainer}>
-         <TouchableOpacity onPress={handleOpenScanner} style={styles.addBtn}>
-            <Ionicons name="camera" size={24} color="#2563EB" />
-            <Text style={styles.addBtnText}>Add Page</Text>
-         </TouchableOpacity>
+      {pages.length > 0 && (
+        <View style={styles.fabContainer}>
+           <TouchableOpacity onPress={handleOpenScanner} style={styles.addBtn}>
+              <Ionicons name="camera" size={24} color="#2563EB" />
+              <Text style={styles.addBtnText}>Add Page</Text>
+           </TouchableOpacity>
 
-         {pages.length > 0 && (
-          <View style={{flex: 1, marginLeft: 16}}>
-            <Text style={{fontSize: 11, fontWeight: '600', color: '#6B7280', textAlign: 'center', marginBottom: 6}}>
-              {tokensLeft} Scans Remaining
-            </Text>
-            <TouchableOpacity onPress={handleAnalyze} disabled={isAnalyzing} style={[styles.analyzeBtn, {marginLeft: 0}]}>
-              {isAnalyzing ? <ActivityIndicator color="white"/> : (
-                <>
-                  <Text style={styles.analyzeText}>Analyze {pages.length} Pages</Text>
-                  <Ionicons name="arrow-forward" size={20} color="white" style={{marginLeft:8}}/>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
+           <View style={{flex: 1, marginLeft: 16}}>
+             <Text style={{fontSize: 11, fontWeight: '600', color: '#6B7280', textAlign: 'center', marginBottom: 6}}>
+               {tokensLeft} Scans Remaining
+             </Text>
+             <TouchableOpacity onPress={handleAnalyze} disabled={isAnalyzing} style={[styles.analyzeBtn, {marginLeft: 0}]}>
+               {isAnalyzing ? <ActivityIndicator color="white"/> : (
+                 <>
+                   <Text style={styles.analyzeText}>Analyze {pages.length} Pages</Text>
+                   <Ionicons name="arrow-forward" size={20} color="white" style={{marginLeft:8}}/>
+                 </>
+               )}
+             </TouchableOpacity>
+           </View>
+        </View>
+      )}
 
       <Modal visible={reorderModalVisible} transparent={true} animationType="fade">
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalContainer}>
@@ -360,7 +387,7 @@ export default function WorkspaceScreen() {
           <View style={styles.fsContent}>
             {selectedImage && (
               <Image 
-                source={{ uri: selectedImage.uri }} 
+                source={{ uri: selectedImage.localUri }} 
                 style={[styles.fullImage, { transform: [{ rotate: `${selectedImage.rotation}deg` }] }]} 
                 resizeMode="contain" 
               />
@@ -437,9 +464,14 @@ const styles = StyleSheet.create({
   addBtnText: { color: '#2563EB', fontWeight: 'bold', marginLeft: 8 },
   analyzeBtn: { flex: 1, marginLeft: 16, backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 50, borderRadius: 25, shadowColor: "#000", shadowOpacity: 0.2, elevation: 3 },
   analyzeText: { fontWeight: 'bold', fontSize: 16, color: 'white' },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 100 },
-  emptyIconCircle: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#E5E7EB', justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
-  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151' },
+  emptyStateContainer: { flex: 1, padding: 24, justifyContent: 'center' },
+  emptyStateHeading: { fontSize: 24, fontWeight: 'bold', color: '#111827', marginBottom: 8, textAlign: 'center' },
+  emptyStateSub: { fontSize: 14, color: '#6B7280', marginBottom: 32, textAlign: 'center' },
+  actionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', padding: 20, borderRadius: 16, marginBottom: 16, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 3, borderWidth: 1, borderColor: '#F3F4F6' },
+  actionIconBg: { width: 64, height: 64, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  actionTextContent: { flex: 1 },
+  actionTitle: { fontSize: 17, fontWeight: '700', color: '#1F2937', marginBottom: 4 },
+  actionDesc: { fontSize: 13, color: '#6B7280' },
   modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   dialog: { backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 340 },
   dialogTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 8, color: '#111' },

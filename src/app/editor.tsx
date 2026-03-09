@@ -16,6 +16,7 @@ import Purchases from 'react-native-purchases';
 import Constants from 'expo-constants';
 import { transcribeHandwriting, transcribeFormulaSnippet } from '../core/services/gemini'; 
 import { saveProject, getProject, ExamProject, Section, Question, checkScanEligibility, deductScanToken, purchaseTokens, getAppSettings } from '../core/services/storage'; 
+import { presentPaywall, purchaseScanPack } from '../core/services/purchases';
 import { generateExamHtml } from '../core/services/pdf';
 import * as Haptics from 'expo-haptics';
 import CustomAlert from '../components/CustomAlert';
@@ -252,19 +253,19 @@ const QuestionCard = memo(({
 
       {/* DIAGRAM AREA */}
       {(!isInstruction) && (
-        (!item.diagramUri || item.diagramUri === "NEEDS_CROP" ? (
+        (!item.localUri || item.localUri === "NEEDS_CROP" ? (
           <TouchableOpacity 
             onPress={() => !isSelectMode && onPickDiagram(sectionId, item.id)} 
-            style={[styles.addDiagramBtn, item.diagramUri === "NEEDS_CROP" && styles.addDiagramBtnHighlight]}
+            style={[styles.addDiagramBtn, item.localUri === "NEEDS_CROP" && styles.addDiagramBtnHighlight]}
           >
-             <Ionicons name={item.diagramUri === "NEEDS_CROP" ? "scan-outline" : "image-outline"} size={18} color={item.diagramUri === "NEEDS_CROP" ? "#2563EB" : "#6B7280"} />
-             <Text style={[styles.addDiagramText, item.diagramUri === "NEEDS_CROP" && styles.addDiagramTextHighlight]}>
-               {item.diagramUri === "NEEDS_CROP" ? "AI Detected Diagram (Tap to crop)" : "Add Diagram"}
+             <Ionicons name={item.localUri === "NEEDS_CROP" ? "scan-outline" : "image-outline"} size={18} color={item.localUri === "NEEDS_CROP" ? "#2563EB" : "#6B7280"} />
+             <Text style={[styles.addDiagramText, item.localUri === "NEEDS_CROP" && styles.addDiagramTextHighlight]}>
+               {item.localUri === "NEEDS_CROP" ? "AI Detected Diagram (Tap to crop)" : "Add Diagram"}
              </Text>
           </TouchableOpacity>
         ) : (
           <View>
-            <Image source={{ uri: item.diagramUri }} style={[styles.qImage, item.hideText && {borderColor:'#2563EB', borderWidth:2}]} resizeMode="contain" />
+            <Image source={{ uri: item.localUri }} style={[styles.qImage, item.hideText && {borderColor:'#2563EB', borderWidth:2}]} resizeMode="contain" />
              <View style={styles.diagramControl}>
                <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
                   <Text style={styles.ctrlSub}>Settings</Text>
@@ -562,7 +563,7 @@ export default function EditorScreen() {
           } else {
             const formatted = parsed.map((q: any, index: number) => ({
               id: Date.now().toString() + index, number: "", text: q.text || q.question_text || "", 
-              marks: (q.marks || "").toString(), diagramUri: q.diagramUri, 
+              marks: (q.marks || "").toString(), localUri: q.localUri || q.diagramUri, 
               hideText: q.has_diagram ? true : false, isFullWidth: false, type: 'standard', options: []
             }));
             const newSection: Section = { id: Date.now().toString(), title: 'Section A', layout: '1-column', questions: formatted };
@@ -701,7 +702,17 @@ export default function EditorScreen() {
   
   const updateSection = useCallback((id: string, field: keyof Section, value: any) => setSections(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s)), []);
   
-  const deleteSection = useCallback((id: string) => showAlert("Delete Section?", "Remove all questions?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => setSections(prev => prev.filter(s => s.id !== id)) }]), [showAlert]);
+  const deleteSection = useCallback((id: string) => showAlert("Delete Section?", "Remove all questions?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => {
+    setSections(prev => {
+      const sec = prev.find(s => s.id === id);
+      if (sec) {
+        sec.questions.forEach(q => {
+          if (q.localUri && !q.localUri.startsWith('data:image')) FileSystem.deleteAsync(q.localUri, { idempotent: true }).catch(()=>{});
+        });
+      }
+      return prev.filter(s => s.id !== id);
+    });
+  } }]), [showAlert]);
   
   const updateQ = useCallback((secId: string, qId: string, field: any, value: any) => setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: s.questions.map(q => q.id === qId ? { ...q, [field]: value } : q) } : s)), []);
   
@@ -710,7 +721,16 @@ export default function EditorScreen() {
     showAlert("Delete Question?", "Are you sure you want to remove this question?", [
       { text: "Cancel", style: "cancel" },
       { text: "Delete", style: "destructive", onPress: () => {
-          setSections(prev => prev.map(s => s.id === secId ? { ...s, questions: s.questions.filter(q => q.id !== qId) } : s));
+          setSections(prev => {
+            const sec = prev.find(s => s.id === secId);
+            if (sec) {
+              const q = sec.questions.find(q => q.id === qId);
+              if (q?.localUri && !q.localUri.startsWith('data:image')) {
+                FileSystem.deleteAsync(q.localUri, { idempotent: true }).catch(()=>{});
+              }
+            }
+            return prev.map(s => s.id === secId ? { ...s, questions: s.questions.filter(q => q.id !== qId) } : s);
+          });
       }}
     ]);
   }, [showAlert]);
@@ -777,7 +797,7 @@ export default function EditorScreen() {
         quality: 1,
       });
       if (!result.canceled && result.assets[0]) {
-        updateQ(secId, qId, 'diagramUri', result.assets[0].uri);
+        updateQ(secId, qId, 'localUri', result.assets[0].uri);
       }
     } catch (e) {
       showAlert("Error", "Could not pick image.");
@@ -916,13 +936,10 @@ export default function EditorScreen() {
           </View>
         </View>
 
-        {/* RIGHT: Select & Save (Undo removed!) */}
+        {/* RIGHT: Select Mode Toggle */}
         <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 6, zIndex: 10 }} pointerEvents="box-none">
           <TouchableOpacity onPress={() => { setIsSelectMode(!isSelectMode); setSelectedIds(new Set()); }} style={[styles.saveBtn, isSelectMode && {backgroundColor:'#2563EB'}]}>
             <Ionicons name="checkbox-outline" size={20} color={isSelectMode ? "white" : "#2563EB"} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleManualSave} style={styles.saveBtn} disabled={isSaving}>
-            {isSaving ? <ActivityIndicator size="small" color="#2563EB"/> : <Ionicons name="save-outline" size={20} color="#2563EB" />}
           </TouchableOpacity>
         </View>
       </View>
@@ -947,10 +964,10 @@ export default function EditorScreen() {
                 renderItem={renderSectionItem}
                 
                 // 2. ADD THESE 4 PERFORMANCE PROPS
-                initialNumToRender={2}
-                maxToRenderPerBatch={3}
-                windowSize={5}
-                removeClippedSubviews={Platform.OS === 'android'}
+                initialNumToRender={1}
+                maxToRenderPerBatch={2}
+                windowSize={3}
+                removeClippedSubviews={true}
                 
                 ListHeaderComponent={
                   <>
@@ -990,8 +1007,31 @@ export default function EditorScreen() {
         )}
       </View>
 
-      {viewMode === 'edit' && (
-        <TouchableOpacity onPress={handleExport} style={styles.fab}><Ionicons name="share-outline" size={24} color="white" /><Text style={styles.fabText}>Export PDF</Text></TouchableOpacity>
+      {/* STICKY BOTTOM ACTION BAR */}
+      {viewMode === 'edit' && !isSelectMode && (
+        <View style={styles.bottomBar}>
+          <TouchableOpacity onPress={handleManualSave} style={styles.bottomBarBtn} disabled={isSaving}>
+            {isSaving ? <ActivityIndicator size="small" color="#4B5563"/> : <Ionicons name="save-outline" size={22} color="#4B5563" />}
+            <Text style={styles.bottomBarText}>Save</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => {
+            const lastSecId = sections[sections.length - 1]?.id;
+            if (lastSecId) {
+              addQ(lastSecId);
+            } else {
+              addSection();
+            }
+          }} style={styles.bottomBarBtnPrimary}>
+            <Ionicons name="add" size={22} color="white" />
+            <Text style={styles.bottomBarTextPrimary}>Add Question</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={handleExport} style={styles.bottomBarBtn}>
+            <Ionicons name="share-outline" size={22} color="#4B5563" />
+            <Text style={styles.bottomBarText}>Export</Text>
+          </TouchableOpacity>
+        </View>
       )}
       
       {/* SCAN PROGRESS TRACKER OVERLAY */}
@@ -1160,28 +1200,12 @@ export default function EditorScreen() {
                 }
                 // ------------------
 
-                try {
-                  // 1. Fetch the products you set up in the RevenueCat dashboard
-                  const offerings = await Purchases.getOfferings();
-                  
-                  // 2. Look for the specific "10 Scans" package (you will name this in the dashboard)
-                  const packageToBuy = offerings.current?.availablePackages.find(p => p.identifier === '10_scans_pack');
-                  
-                  if (packageToBuy) {
-                    // 3. Trigger the native Apple/Google payment sheet!
-                    const { customerInfo } = await Purchases.purchasePackage(packageToBuy);
-                    
-                    // 4. If payment succeeds, give them the tokens locally!
-                    await purchaseTokens(10);
-                    setShowPaywall(false);
-                    showAlert("Payment Successful!", "10 Scans have been added to your account.");
-                  } else {
-                    showAlert("Store Error", "Product not found. Please try again later.");
-                  }
-                } catch (e: any) {
-                  if (!e.userCancelled) {
-                    showAlert("Payment Failed", e.message);
-                  }
+                const success = await purchaseScanPack('10_scans_pack');
+                if (success) {
+                  setShowPaywall(false);
+                  showAlert("Payment Successful!", "10 Scans have been added to your account.");
+                } else {
+                  showAlert("Payment Failed", "Please try again later.");
                 }
               }} style={styles.exportBtn}>
                 <View style={styles.exportIconCircle}>
@@ -1200,28 +1224,12 @@ export default function EditorScreen() {
                 }
                 // ------------------
 
-                try {
-                  // 1. Fetch the products you set up in the RevenueCat dashboard
-                  const offerings = await Purchases.getOfferings();
-                  
-                  // 2. Look for the specific "50 Scans" package (you will name this in the dashboard)
-                  const packageToBuy = offerings.current?.availablePackages.find(p => p.identifier === '50_scans_pack');
-                  
-                  if (packageToBuy) {
-                    // 3. Trigger the native Apple/Google payment sheet!
-                    const { customerInfo } = await Purchases.purchasePackage(packageToBuy);
-                    
-                    // 4. If payment succeeds, give them the tokens locally!
-                    await purchaseTokens(50);
-                    setShowPaywall(false);
-                    showAlert("Payment Successful!", "50 Scans have been added to your account.");
-                  } else {
-                    showAlert("Store Error", "Product not found. Please try again later.");
-                  }
-                } catch (e: any) {
-                  if (!e.userCancelled) {
-                    showAlert("Payment Failed", e.message);
-                  }
+                const success = await purchaseScanPack('50_scans');
+                if (success) {
+                  setShowPaywall(false);
+                  showAlert("Payment Successful!", "50 Scans have been added to your account.");
+                } else {
+                  showAlert("Payment Failed", "Please try again later.");
                 }
               }} style={styles.exportBtn}>
                 <View style={styles.exportIconCircle}>
@@ -1231,6 +1239,16 @@ export default function EditorScreen() {
                 <Text style={styles.exportBtnSub}>$9.99</Text>
               </TouchableOpacity>
             </View>
+            
+            <TouchableOpacity 
+              onPress={() => {
+                setShowPaywall(false);
+                presentPaywall();
+              }} 
+              style={{ marginTop: 20, padding: 10, backgroundColor: '#EFF6FF', borderRadius: 8 }}
+            >
+              <Text style={{ color: '#2563EB', fontWeight: 'bold', textAlign: 'center' }}>Show Full Paywall</Text>
+            </TouchableOpacity>
             <TouchableOpacity onPress={() => setShowPaywall(false)} style={styles.exportCancel}>
               <Text style={styles.exportCancelText}>Cancel</Text>
             </TouchableOpacity>
@@ -1492,7 +1510,14 @@ const styles = StyleSheet.create({
   footerActions: { marginTop: 20, marginBottom: 40 },
   addBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 16, borderStyle: 'dashed', borderWidth: 1, borderColor: '#9CA3AF', borderRadius: 12, backgroundColor: '#e5e7eb' },
   addText: { color: '#374151', fontWeight: '700' },
-  fab: { position: 'absolute', bottom: 30, right: 30, backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 16, borderRadius: 32, shadowColor: "#000", shadowOpacity: 0.2, shadowOffset: {width:0, height:4}, elevation: 5 },
+
+  // --- STICKY BOTTOM BAR ---
+  bottomBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: 'white', borderTopWidth: 1, borderColor: '#E5E7EB', paddingBottom: Platform.OS === 'ios' ? 24 : 12 },
+  bottomBarBtn: { alignItems: 'center', justifyContent: 'center', padding: 8, minWidth: 64 },
+  bottomBarText: { fontSize: 11, fontWeight: '600', color: '#4B5563', marginTop: 4 },
+  bottomBarBtnPrimary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#2563EB', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 24, flex: 1, marginHorizontal: 16, shadowColor: "#000", shadowOpacity: 0.1, shadowOffset: {width:0, height:2}, elevation: 2 },
+  bottomBarTextPrimary: { color: 'white', fontWeight: 'bold', fontSize: 14, marginLeft: 6 },
+
   fabPreview: { position: 'absolute', bottom: 30, alignSelf: 'center', backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 16, borderRadius: 32, shadowColor: "#000", shadowOpacity: 0.2, shadowOffset: {width:0, height:4}, elevation: 5 },
   fabText: { color: 'white', fontWeight: 'bold', marginLeft: 8, fontSize: 16 },
   previewContainer: { flex: 1, backgroundColor: '#eee' },

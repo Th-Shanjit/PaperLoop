@@ -19,7 +19,7 @@ export interface Question {
   number: string;
   text: string;
   marks: string;
-  diagramUri?: string;
+  localUri?: string;
   diagramSize?: 'S' | 'M' | 'L';
   hideText?: boolean;
   isFullWidth?: boolean;
@@ -100,6 +100,20 @@ export const loadProjects = async (): Promise<ExamProject[]> => {
 };
 
 export const deleteProject = async (id: string) => {
+  const project = await getProject(id);
+  if (project) {
+    // Delete all local images associated with this project
+    for (const sec of project.sections) {
+      for (const q of sec.questions) {
+        if (q.localUri && !q.localUri.startsWith('data:image')) {
+          try {
+            await FileSystem.deleteAsync(q.localUri, { idempotent: true });
+          } catch (e) {}
+        }
+      }
+    }
+  }
+
   const fileUri = PROJECT_DIR + `${id}.json`;
   await FileSystem.deleteAsync(fileUri, { idempotent: true });
 };

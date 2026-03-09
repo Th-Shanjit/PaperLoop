@@ -165,23 +165,23 @@ const DIAGRAM_HEIGHTS: Record<string, string> = {
 const processImages = async (sections: Section[]) => {
   const result = await Promise.all(sections.map(async (sec) => {
     const processedQs = await Promise.all(sec.questions.map(async (q) => {
-      if (q.diagramUri && q.diagramUri !== "NEEDS_CROP") {
+      if (q.localUri && q.localUri !== "NEEDS_CROP") {
         try {
           // Already base64? Return as-is
-          if (q.diagramUri.startsWith('data:image')) {
+          if (q.localUri.startsWith('data:image')) {
             return q;
           }
 
-          const fileInfo = await FileSystem.getInfoAsync(q.diagramUri);
+          const fileInfo = await FileSystem.getInfoAsync(q.localUri);
           if (!fileInfo.exists) {
             return q;
           }
 
           // --- CRITICAL FIX: Memory footprint reduction ---
-          let enhancedUri = q.diagramUri;
+          let enhancedUri = q.localUri;
           try {
             const enhanced = await ImageManipulator.manipulateAsync(
-              q.diagramUri,
+              q.localUri,
               [{ resize: { width: 800 } }], // Reduced from 1200 to 800 to prevent base64 memory crashes
               { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG } // Switched from PNG to JPEG for massive size reduction
             );
@@ -350,7 +350,7 @@ export const generateExamHtml = async (
           const visibleQs = sec.questions.filter(q => 
             (q.text && q.text.trim() !== '' && q.text !== 'New Question...') || 
             (q as any).imageSrc || 
-            (q.diagramUri && q.diagramUri !== 'NEEDS_CROP')
+            (q.localUri && q.localUri !== 'NEEDS_CROP')
           );
           if (visibleQs.length === 0) return '';
           return `

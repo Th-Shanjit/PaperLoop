@@ -217,9 +217,9 @@ export const transcribeHandwriting = async (pages: ScannedPage[], onProgress?: (
             if (q.has_diagram && q.box_2d && q.box_2d.length === 4) {
               const croppedUri = await autoCropDiagram(processedImg.uri, q.box_2d, processedImg.width, processedImg.height);
               // If successful, bypass "NEEDS_CROP" and instantly display the image!
-              q.diagramUri = croppedUri || "NEEDS_CROP";
+              q.localUri = croppedUri || "NEEDS_CROP";
             } else {
-              q.diagramUri = q.has_diagram ? "NEEDS_CROP" : undefined;
+              q.localUri = q.has_diagram ? "NEEDS_CROP" : undefined;
             }
             
             q.hideText = false;

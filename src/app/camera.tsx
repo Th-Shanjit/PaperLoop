@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { 
   addPageToSession, 
@@ -37,7 +38,14 @@ export default function CameraScreen() {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        addPageToSession({ uri: asset.uri, width: asset.width, height: asset.height });
+        const fileExt = asset.uri.split('.').pop() || 'jpg';
+        const newFileName = `snippet_${Date.now()}.${fileExt}`;
+        const newPath = FileSystem.documentDirectory + 'snippets/' + newFileName;
+        
+        await FileSystem.makeDirectoryAsync(FileSystem.documentDirectory + 'snippets/', { intermediates: true });
+        await FileSystem.copyAsync({ from: asset.uri, to: newPath });
+
+        addPageToSession({ localUri: newPath, width: asset.width, height: asset.height });
         refreshPages();
       } 
     } catch (e) {
@@ -52,9 +60,14 @@ export default function CameraScreen() {
       allowsMultipleSelection: true
     });
     if (!result.canceled) {
-      result.assets.forEach(asset => {
-        addPageToSession({ uri: asset.uri, width: asset.width, height: asset.height });
-      });
+      await FileSystem.makeDirectoryAsync(FileSystem.documentDirectory + 'snippets/', { intermediates: true });
+      for (const asset of result.assets) {
+        const fileExt = asset.uri.split('.').pop() || 'jpg';
+        const newFileName = `snippet_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+        const newPath = FileSystem.documentDirectory + 'snippets/' + newFileName;
+        await FileSystem.copyAsync({ from: asset.uri, to: newPath });
+        addPageToSession({ localUri: newPath, width: asset.width, height: asset.height });
+      }
       refreshPages();
     }
   };
@@ -67,9 +80,9 @@ export default function CameraScreen() {
     }
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (reviewIndex !== null) {
-      removePageFromSession(reviewIndex);
+      await removePageFromSession(reviewIndex);
       refreshPages();
       setReviewIndex(null);
     }
@@ -82,13 +95,22 @@ export default function CameraScreen() {
         
         // CRITICAL FIX: Physically rotate the image file instead of just CSS
         const result = await ImageManipulator.manipulateAsync(
-          currentPage.uri,
+          currentPage.localUri,
           [{ rotate: 90 }],
           { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
         );
 
+        // Delete the old file
+        try {
+          await FileSystem.deleteAsync(currentPage.localUri, { idempotent: true });
+        } catch (e) {}
+
+        const newFileName = `snippet_${Date.now()}_rot.jpg`;
+        const newPath = FileSystem.documentDirectory + 'snippets/' + newFileName;
+        await FileSystem.copyAsync({ from: result.uri, to: newPath });
+
         updatePageInSession(reviewIndex, { 
-          uri: result.uri, 
+          localUri: newPath, 
           width: result.width, 
           height: result.height,
           rotation: 0 // Reset CSS rotation since file is actually rotated
@@ -129,7 +151,7 @@ export default function CameraScreen() {
              {pages.map((p, index) => (
                <TouchableOpacity key={index} onPress={() => setReviewIndex(index)} style={styles.gridItem}>
                  <Image 
-                   source={{ uri: p.uri }} 
+                   source={{ uri: p.localUri }} 
                    style={[styles.gridThumb, { transform: [{ rotate: `${p.rotation}deg` }] }]} 
                    resizeMode="contain" // FIX: Ensures no cropping on rotation
                  />
@@ -165,7 +187,7 @@ export default function CameraScreen() {
           <View style={styles.modalContent}>
             {reviewIndex !== null && pages[reviewIndex] && (
               <Image 
-                source={{ uri: pages[reviewIndex].uri }} 
+                source={{ uri: pages[reviewIndex].localUri }} 
                 style={[styles.modalImage, { transform: [{ rotate: `${pages[reviewIndex].rotation}deg` }] }]} 
                 resizeMode="contain" 
               />

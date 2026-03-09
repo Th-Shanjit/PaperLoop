@@ -24,8 +24,9 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.paperloop.app",
-      "softwareKeyboardLayoutMode": "resize"
+      "package": "com.paperloop.official",
+      "softwareKeyboardLayoutMode": "resize",
+      "minify": true 
     },
     "web": {
       "favicon": "./assets/favicon.png"

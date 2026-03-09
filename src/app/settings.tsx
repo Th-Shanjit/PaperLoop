@@ -8,6 +8,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import Purchases from 'react-native-purchases';
 import Constants from 'expo-constants';
 import { getAppSettings, saveAppSettings, AppSettings, clearImageCache, purchaseTokens } from '../core/services/storage';
+import { purchaseScanPack, presentCustomerCenter, restorePurchases } from '../core/services/purchases';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 
@@ -50,19 +51,34 @@ export default function SettingsScreen() {
 
     // 2. The Real Transaction
     try {
-      const offerings = await Purchases.getOfferings();
-      const packageToBuy = offerings.current?.availablePackages.find(p => p.identifier === packId);
-      
-      if (packageToBuy) {
-        await Purchases.purchasePackage(packageToBuy);
-        await purchaseTokens(tokensToAdd);
-        setSettings({ ...settings, scanTokens: (settings.scanTokens || 0) + tokensToAdd });
+      const success = await purchaseScanPack(packId);
+      if (success) {
+        const data = await getAppSettings();
+        setSettings(data);
         showAlert("Payment Successful!", `${tokensToAdd} Scans added to your account.`);
       } else {
-        showAlert("Store Error", "Product not configured correctly.");
+        showAlert("Payment Failed", "Please try again later.");
       }
     } catch (e: any) {
       if (!e.userCancelled) showAlert("Payment Failed", e.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    setIsProcessing(true);
+    try {
+      const success = await restorePurchases();
+      if (success) {
+        const data = await getAppSettings();
+        setSettings(data);
+        showAlert("Restored", "Your purchases have been successfully restored.");
+      } else {
+        showAlert("Restore Failed", "No previous purchases found to restore.");
+      }
+    } catch (e) {
+      showAlert("Error", "Could not restore purchases at this time.");
     } finally {
       setIsProcessing(false);
     }
@@ -238,6 +254,24 @@ export default function SettingsScreen() {
         {/* DATA & STORAGE */}
         <Text style={styles.sectionTitle}>System</Text>
         <View style={[styles.card, {marginBottom: 40}]}>
+          <TouchableOpacity style={styles.actionRow} onPress={presentCustomerCenter}>
+            <View style={styles.actionLeft}>
+              <Ionicons name="card-outline" size={20} color="#2563EB" />
+              <Text style={[styles.actionText, { color: '#2563EB' }]}>Manage Subscriptions</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#ccc" />
+          </TouchableOpacity>
+          <View style={styles.divider} />
+          
+          <TouchableOpacity style={styles.actionRow} onPress={handleRestore}>
+            <View style={styles.actionLeft}>
+              <Ionicons name="refresh-circle-outline" size={20} color="#6B7280" />
+              <Text style={styles.actionText}>Restore Purchases</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#ccc" />
+          </TouchableOpacity>
+          <View style={styles.divider} />
+
           <TouchableOpacity style={styles.actionRow} onPress={handleClearCache}>
             <View style={styles.actionLeft}>
               <Ionicons name="trash-bin-outline" size={20} color="#DC2626" />

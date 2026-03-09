@@ -3,30 +3,16 @@ import { Stack } from 'expo-router';
 import { Platform } from 'react-native';
 import Purchases from 'react-native-purchases';
 import Constants from 'expo-constants'; // <-- NEW IMPORT
-
-const API_KEYS = {
-  apple: "appl_YOUR_APPLE_KEY_HERE",
-  google: "goog_wFYnGCIMqJwlCoUvpUwBPtTtAtG"
-};
+import { configurePurchases, syncCustomerState } from '../core/services/purchases';
 
 export default function RootLayout() {
   useEffect(() => {
     const initPurchases = async () => {
-      // THE BYPASS: If we are in Expo Go, do not initialize RevenueCat!
-      if (Constants.appOwnership === 'expo') {
-        console.log("Running in Expo Go: Bypassing RevenueCat native setup.");
-        return;
-      }
-
-      try {
-        if (Platform.OS === 'ios') {
-          Purchases.configure({ apiKey: API_KEYS.apple });
-        } else if (Platform.OS === 'android') {
-          Purchases.configure({ apiKey: API_KEYS.google });
-        }
-      } catch (e) {
-        console.error("Failed to initialize RevenueCat", e);
-      }
+      // Configure RevenueCat with the new service
+      configurePurchases();
+      
+      // Sync customer state (entitlements, tokens, etc.)
+      await syncCustomerState();
     };
     initPurchases();
   }, []);

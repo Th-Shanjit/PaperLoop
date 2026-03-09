@@ -1,11 +1,11 @@
 import { create } from 'zustand';
+import * as FileSystem from 'expo-file-system/legacy';
 
 export interface ScannedPage {
-  uri: string;
+  localUri: string;
   width?: number;
   height?: number;
   rotation: number; 
-  // REMOVED: mode
 }
 
 export let currentSessionPages: ScannedPage[] = [];
@@ -28,7 +28,12 @@ export const swapPagesInSession = (indexA: number, indexB: number) => {
   }
 };
 
-export const clearSession = () => {
+export const clearSession = async () => {
+  for (const page of currentSessionPages) {
+    try {
+      await FileSystem.deleteAsync(page.localUri, { idempotent: true });
+    } catch (e) {}
+  }
   currentSessionPages = [];
 };
 
@@ -36,8 +41,12 @@ export const getSessionPages = () => {
   return currentSessionPages;
 };
 
-export const removePageFromSession = (index: number) => {
+export const removePageFromSession = async (index: number) => {
   if (index > -1 && index < currentSessionPages.length) {
+    const page = currentSessionPages[index];
+    try {
+      await FileSystem.deleteAsync(page.localUri, { idempotent: true });
+    } catch (e) {}
     currentSessionPages.splice(index, 1);
   }
 };
