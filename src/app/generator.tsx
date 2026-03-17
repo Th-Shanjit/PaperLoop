@@ -3,7 +3,6 @@ import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, Ale
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Camera, Send, ChevronLeft, Sparkles, X, Trash2, PlusCircle, Layout } from 'lucide-react-native';
-import * as FileSystem from 'expo-file-system/legacy';
 import tw from 'twrnc';
 import { transcribeHandwriting } from '../core/services/gemini';
 import { generateExamPDF, TemplateType } from '../core/services/pdf';
@@ -78,11 +77,15 @@ export default function GeneratorScreen() {
     setResult(null);
     setStatus("Preparing images...");
     try {
-      const base64Images = await Promise.all(
-        images.map(async (uri) => await FileSystem.readAsStringAsync(uri, { encoding: 'base64' }))
-      );
       setStatus(isMathMode ? "📐 Math/Science Mode: Tracing structures..." : "📝 Standard Mode: Reading handwriting...");
-      const data = await transcribeHandwriting(base64Images, isMathMode);
+      // #region agent log
+      const mappedImages = images.map(uri => ({ uri }));
+      fetch('http://127.0.0.1:7459/ingest/96cc0c91-64f8-4192-b458-5e6913215ddd',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'88dc6d'},body:JSON.stringify({sessionId:'88dc6d',location:'generator.tsx:handleTranscribe',message:'images mapped for transcription',data:{imageCount:mappedImages.length,firstUri:mappedImages[0]?.uri?.substring?.(0,80),firstUriType:typeof mappedImages[0]?.uri},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      const data = await transcribeHandwriting(
+        mappedImages,
+        (msg) => setStatus(msg)
+      );
       setStatus("Finalizing...");
       setResult(data);
     } catch (err: any) {

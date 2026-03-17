@@ -8,7 +8,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import Purchases from 'react-native-purchases';
 import Constants from 'expo-constants';
 import { getAppSettings, saveAppSettings, AppSettings, clearImageCache, purchaseTokens } from '../core/services/storage';
-import { purchaseScanPack, presentCustomerCenter, restorePurchases } from '../core/services/purchases';
+import { purchaseScanPack, restorePurchases } from '../core/services/purchases';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
 
@@ -254,14 +254,7 @@ export default function SettingsScreen() {
         {/* DATA & STORAGE */}
         <Text style={styles.sectionTitle}>System</Text>
         <View style={[styles.card, {marginBottom: 40}]}>
-          <TouchableOpacity style={styles.actionRow} onPress={presentCustomerCenter}>
-            <View style={styles.actionLeft}>
-              <Ionicons name="card-outline" size={20} color="#2563EB" />
-              <Text style={[styles.actionText, { color: '#2563EB' }]}>Manage Subscriptions</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color="#ccc" />
-          </TouchableOpacity>
-          <View style={styles.divider} />
+         
           
           <TouchableOpacity style={styles.actionRow} onPress={handleRestore}>
             <View style={styles.actionLeft}>

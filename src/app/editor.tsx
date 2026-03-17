@@ -16,7 +16,7 @@ import Purchases from 'react-native-purchases';
 import Constants from 'expo-constants';
 import { transcribeHandwriting, transcribeFormulaSnippet } from '../core/services/gemini'; 
 import { saveProject, getProject, ExamProject, Section, Question, checkScanEligibility, deductScanToken, purchaseTokens, getAppSettings } from '../core/services/storage'; 
-import { presentPaywall, purchaseScanPack } from '../core/services/purchases';
+import { purchaseScanPack } from '../core/services/purchases';
 import { generateExamHtml } from '../core/services/pdf';
 import * as Haptics from 'expo-haptics';
 import CustomAlert from '../components/CustomAlert';
@@ -1240,15 +1240,6 @@ export default function EditorScreen() {
               </TouchableOpacity>
             </View>
             
-            <TouchableOpacity 
-              onPress={() => {
-                setShowPaywall(false);
-                presentPaywall();
-              }} 
-              style={{ marginTop: 20, padding: 10, backgroundColor: '#EFF6FF', borderRadius: 8 }}
-            >
-              <Text style={{ color: '#2563EB', fontWeight: 'bold', textAlign: 'center' }}>Show Full Paywall</Text>
-            </TouchableOpacity>
             <TouchableOpacity onPress={() => setShowPaywall(false)} style={styles.exportCancel}>
               <Text style={styles.exportCancelText}>Cancel</Text>
             </TouchableOpacity>

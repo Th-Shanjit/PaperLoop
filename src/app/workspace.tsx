@@ -110,7 +110,11 @@ export default function WorkspaceScreen() {
     setScanStatus('Warming up AI engine...'); 
     
     try {
-      const result = await transcribeHandwriting(pages, (msg) => setScanStatus(msg));
+      // #region agent log
+      const mappedPages = pages.map(p => ({ uri: p.localUri, width: p.width, height: p.height }));
+      fetch('http://127.0.0.1:7459/ingest/96cc0c91-64f8-4192-b458-5e6913215ddd',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'88dc6d'},body:JSON.stringify({sessionId:'88dc6d',location:'workspace.tsx:handleAnalyze',message:'pages mapped for transcription',data:{pageCount:mappedPages.length,firstPageUri:mappedPages[0]?.uri?.substring?.(0,80),firstPageUriType:typeof mappedPages[0]?.uri},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      const result = await transcribeHandwriting(mappedPages, (msg) => setScanStatus(msg));
       
       // 1. Count the total questions found across all scanned pages
       let totalQuestions = 0;

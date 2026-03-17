@@ -1,12 +1,11 @@
 import Purchases, { CustomerInfo, PurchasesOffering } from 'react-native-purchases';
-import RevenueCatUI from 'react-native-purchases-ui';
 import { Platform, Alert } from 'react-native';
 import { purchaseTokens, getAppSettings, saveAppSettings } from './storage';
 import Constants from 'expo-constants';
 
 const API_KEYS = {
   apple: "appl_YOUR_APPLE_KEY_HERE", // Replace when you deploy to iOS
-  google: "test_KPNPqclgWpQjiqVJRTbNvnkiUqF"
+  google: "goog_wFYnGCIMqJwlCoUvpUwBPtTtAtG"
 };
 
 export const configurePurchases = () => {
@@ -99,39 +98,6 @@ export const restorePurchases = async (): Promise<boolean> => {
   } catch (e) {
     console.error("Failed to restore purchases", e);
     return false;
-  }
-};
-
-/**
- * Present the RevenueCat Paywall UI
- */
-export const presentPaywall = async () => {
-  if (Constants.appOwnership === 'expo') {
-    Alert.alert("Expo Go Mode", "Paywall is mocked in Expo Go.");
-    return;
-  }
-  
-  try {
-    const result = await RevenueCatUI.presentPaywall();
-    console.log("Paywall result:", result);
-  } catch (e) {
-    console.error("Failed to present paywall", e);
-  }
-};
-
-/**
- * Present the Customer Center for subscription management
- */
-export const presentCustomerCenter = async () => {
-  if (Constants.appOwnership === 'expo') {
-    Alert.alert("Expo Go Mode", "Customer Center is mocked in Expo Go.");
-    return;
-  }
-  
-  try {
-    await RevenueCatUI.presentCustomerCenter();
-  } catch (e) {
-    console.error("Failed to present customer center", e);
   }
 };
 
