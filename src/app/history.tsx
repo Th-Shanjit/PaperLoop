@@ -1,19 +1,22 @@
 import React, { useState, useCallback } from 'react';
 import { 
-  View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, StatusBar, 
+  View, Text, FlatList, TouchableOpacity, StyleSheet, StatusBar, 
   RefreshControl, Modal, TextInput 
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { loadProjects, deleteProject, renameProject, ExamProject } from '../core/services/storage';
+import CustomAlert from '../components/CustomAlert';
+import { useCustomAlert } from '../hooks/useCustomAlert';
+import { colors, typography, spacing, radii, shadows } from '../core/theme';
 
 export default function HistoryScreen() {
   const router = useRouter();
+  const { alertState, showAlert, closeAlert } = useCustomAlert();
   const [projects, setProjects] = useState<ExamProject[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   
-  // Rename State
   const [renameId, setRenameId] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
 
@@ -30,6 +33,11 @@ export default function HistoryScreen() {
     }, [])
   );
 
+  const getQuestionCount = (item: ExamProject): number => {
+    return (item.sections || []).reduce((t, s) => t + (s.questions?.length || 0), 0)
+      || (item.questions?.length || 0);
+  };
+
   const handleOpen = (project: ExamProject) => {
     router.push({
       pathname: "/editor",
@@ -38,7 +46,7 @@ export default function HistoryScreen() {
   };
 
   const handleDelete = (id: string) => {
-    Alert.alert("Delete Exam?", "This action cannot be undone.", [
+    showAlert("Delete Exam?", "This action cannot be undone.", [
       { text: "Cancel", style: "cancel" },
       { text: "Delete", style: "destructive", onPress: async () => {
           await deleteProject(id);
@@ -56,35 +64,33 @@ export default function HistoryScreen() {
     if (renameId && newTitle.trim()) {
       await renameProject(renameId, newTitle.trim());
       setRenameId(null);
-      loadData(); // Refresh list to show new name
+      loadData();
     }
   };
 
   const renderItem = ({ item }: { item: ExamProject }) => (
     <TouchableOpacity onPress={() => handleOpen(item)} style={styles.card} activeOpacity={0.7}>
       <View style={styles.iconBox}>
-        <Ionicons name="document-text" size={24} color="#2563EB" />
+        <Ionicons name="document-text" size={24} color={colors.primary.normal} />
       </View>
       <View style={styles.info}>
         <Text style={styles.title} numberOfLines={1}>
           {item.title || "Untitled Exam"}
         </Text>
         <Text style={styles.sub}>
-          {/* Fix: Correct Date Formatting */}
           {new Date(item.updatedAt).toLocaleDateString(undefined, {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
           })}
-           {' • '}{item.questions.length} Questions
+           {' • '}{getQuestionCount(item)} Questions
         </Text>
       </View>
       
-      {/* Action Buttons */}
       <View style={styles.actions}>
-        <TouchableOpacity onPress={() => initRename(item)} style={styles.actionBtn}>
-          <Ionicons name="pencil" size={20} color="#64748B" />
+        <TouchableOpacity onPress={() => initRename(item)} style={styles.actionBtn} accessibilityLabel="Rename exam">
+          <Ionicons name="pencil" size={20} color={colors.label.alternative} />
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.actionBtn}>
-          <Ionicons name="trash-outline" size={20} color="#EF4444" />
+        <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.actionBtn} accessibilityLabel="Delete exam">
+          <Ionicons name="trash-outline" size={20} color={colors.status.negative} />
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
@@ -92,11 +98,11 @@ export default function HistoryScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F3F4F6" />
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background.alternative} />
       
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#111" />
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} accessibilityLabel="Go back">
+          <Ionicons name="arrow-back" size={24} color={colors.label.normal} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>My Exams</Text>
         <View style={{width:40}} />
@@ -107,10 +113,10 @@ export default function HistoryScreen() {
         renderItem={renderItem}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor={colors.primary.normal} />}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Ionicons name="file-tray-outline" size={64} color="#CBD5E1" />
+            <Ionicons name="file-tray-outline" size={64} color={colors.line.normal} />
             <Text style={styles.emptyText}>No saved exams</Text>
             <Text style={styles.emptySub}>Scanned exams will appear here</Text>
           </View>
@@ -133,39 +139,41 @@ export default function HistoryScreen() {
               <TouchableOpacity onPress={() => setRenameId(null)} style={styles.modalBtn}>
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={confirmRename} style={[styles.modalBtn, {backgroundColor:'#2563EB'}]}>
-                <Text style={[styles.modalBtnText, {color:'white'}]}>Save</Text>
+              <TouchableOpacity onPress={confirmRename} style={[styles.modalBtn, {backgroundColor: colors.primary.normal}]}>
+                <Text style={[styles.modalBtnText, {color: colors.background.normal}]}>Save</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
+
+      <CustomAlert {...alertState} onClose={closeAlert} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F3F4F6' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#E5E7EB' },
-  backBtn: { padding: 8 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#111' },
-  list: { padding: 16 },
-  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', padding: 16, borderRadius: 12, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.05, elevation: 1 },
-  iconBox: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#EFF6FF', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  container: { flex: 1, backgroundColor: colors.background.alternative },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.lg, backgroundColor: colors.background.normal, borderBottomWidth: 1, borderColor: colors.line.normal },
+  backBtn: { padding: spacing.sm },
+  headerTitle: { ...typography.heading3, color: colors.label.normal },
+  list: { padding: spacing.lg },
+  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background.normal, padding: spacing.lg, borderRadius: radii.lg, marginBottom: spacing.md, ...shadows.small },
+  iconBox: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.accent.blue.bg, justifyContent: 'center', alignItems: 'center', marginRight: spacing.lg },
   info: { flex: 1 },
-  title: { fontSize: 16, fontWeight: '700', color: '#1E293B', marginBottom: 4 },
-  sub: { fontSize: 12, color: '#64748B' },
-  actions: { flexDirection: 'row', gap: 8 },
-  actionBtn: { padding: 8 },
+  title: { ...typography.heading4, color: colors.label.normal, marginBottom: spacing.xs },
+  sub: { ...typography.bodySmall, color: colors.label.alternative },
+  actions: { flexDirection: 'row', gap: spacing.sm },
+  actionBtn: { padding: spacing.sm },
   empty: { alignItems: 'center', marginTop: 100 },
-  emptyText: { fontSize: 18, fontWeight: '600', color: '#94A3B8', marginTop: 16 },
-  emptySub: { fontSize: 14, color: '#CBD5E1', marginTop: 8 },
+  emptyText: { ...typography.heading3, color: colors.label.assistive, marginTop: spacing.lg },
+  emptySub: { ...typography.body, color: colors.label.disable, marginTop: spacing.sm },
   
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
-  modalContent: { backgroundColor: 'white', borderRadius: 16, padding: 20 },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
-  modalInput: { backgroundColor: '#F3F4F6', padding: 12, borderRadius: 8, fontSize: 16, marginBottom: 20 },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12 },
-  modalBtn: { paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8, backgroundColor: '#E5E7EB' },
-  modalBtnText: { fontWeight: '600', color: '#374151' }
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.xl },
+  modalContent: { backgroundColor: colors.background.normal, borderRadius: radii.xl, padding: spacing.xl },
+  modalTitle: { ...typography.heading3, color: colors.label.normal, marginBottom: spacing.lg },
+  modalInput: { backgroundColor: colors.background.alternative, padding: spacing.md, borderRadius: radii.sm, ...typography.body, color: colors.label.normal, marginBottom: spacing.xl },
+  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.md },
+  modalBtn: { paddingVertical: 10, paddingHorizontal: spacing.xl, borderRadius: radii.sm, backgroundColor: colors.line.normal },
+  modalBtnText: { ...typography.buttonSmall, color: colors.label.alternative }
 });

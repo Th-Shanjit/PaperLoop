@@ -1,5 +1,6 @@
 import React from 'react';
 import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { colors, typography, spacing, radii, shadows } from '../core/theme';
 
 export interface AlertButton {
   text: string;
@@ -58,17 +59,17 @@ export default function CustomAlert({ visible, title, message, buttons, onClose 
 }
 
 const styles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  alertBox: { backgroundColor: 'white', borderRadius: 24, padding: 24, width: '100%', maxWidth: 340, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 },
-  title: { fontSize: 20, fontWeight: '800', color: '#111827', marginBottom: 8 },
-  message: { fontSize: 15, color: '#4B5563', lineHeight: 22, marginBottom: 24 },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  alertBox: { backgroundColor: colors.background.normal, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 },
+  title: { fontSize: 20, fontWeight: '800', color: colors.label.normal, marginBottom: 8 },
+  message: { fontSize: 15, color: colors.label.alternative, lineHeight: 22, marginBottom: 24 },
   buttonRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, flexWrap: 'wrap' },
   button: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12, minWidth: 80, alignItems: 'center' },
-  btnDefault: { backgroundColor: '#2563EB' },
-  btnCancel: { backgroundColor: '#F3F4F6' },
-  btnDestructive: { backgroundColor: '#FEE2E2' },
+  btnDefault: { backgroundColor: colors.primary.normal },
+  btnCancel: { backgroundColor: colors.background.alternative },
+  btnDestructive: { backgroundColor: colors.status.negativeBg },
   buttonText: { fontSize: 15, fontWeight: '700' },
-  textDefault: { color: 'white' },
-  textCancel: { color: '#4B5563' },
-  textDestructive: { color: '#DC2626' }
+  textDefault: { color: colors.background.normal },
+  textCancel: { color: colors.label.alternative },
+  textDestructive: { color: colors.status.negative }
 });

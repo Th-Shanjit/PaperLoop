@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  View, Text, TouchableOpacity, StyleSheet, StatusBar, Image, ScrollView, Modal, Alert 
+  View, Text, TouchableOpacity, StyleSheet, StatusBar, Image, ScrollView, Modal 
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { 
   addPageToSession, 
   getSessionPages, 
@@ -15,9 +15,16 @@ import {
   updatePageInSession,
   ScannedPage 
 } from '../core/store/session';
+import { usePostHog } from 'posthog-react-native';
+import CustomAlert from '../components/CustomAlert';
+import { useCustomAlert } from '../hooks/useCustomAlert';
+import { colors, typography, spacing, radii, shadows } from '../core/theme';
 
 export default function CameraScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const posthog = usePostHog();
+  const { alertState, showAlert, closeAlert } = useCustomAlert();
   const [pages, setPages] = useState<ScannedPage[]>([]);
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
 
@@ -46,10 +53,11 @@ export default function CameraScreen() {
         await FileSystem.copyAsync({ from: asset.uri, to: newPath });
 
         addPageToSession({ localUri: newPath, width: asset.width, height: asset.height });
+        posthog?.capture('photo_captured');
         refreshPages();
       } 
     } catch (e) {
-      Alert.alert("Error", "Could not launch camera");
+      showAlert("Error", "Could not launch camera.");
     }
   };
 
@@ -67,6 +75,7 @@ export default function CameraScreen() {
         const newPath = FileSystem.documentDirectory + 'snippets/' + newFileName;
         await FileSystem.copyAsync({ from: asset.uri, to: newPath });
         addPageToSession({ localUri: newPath, width: asset.width, height: asset.height });
+        posthog?.capture('photo_captured');
       }
       refreshPages();
     }
@@ -118,7 +127,7 @@ export default function CameraScreen() {
         
         refreshPages();
       } catch (e) {
-        Alert.alert("Error", "Could not rotate image.");
+        showAlert("Error", "Could not rotate image.");
       }
     }
   };
@@ -129,7 +138,20 @@ export default function CameraScreen() {
       
       {/* HEADER */}
       <SafeAreaView style={styles.topBar}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn}>
+        <TouchableOpacity accessibilityLabel="Close camera" onPress={() => {
+          if (pages.length > 0) {
+            showAlert(
+              "Leave without saving?",
+              `You have ${pages.length} scanned page${pages.length > 1 ? 's' : ''}. They will be lost if you leave now.`,
+              [
+                { text: "Stay", style: "cancel" },
+                { text: "Leave", style: "destructive", onPress: () => router.back() }
+              ]
+            );
+          } else {
+            router.back();
+          }
+        }} style={styles.iconBtn}>
           <Ionicons name="close" size={26} color="white" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>
@@ -147,7 +169,7 @@ export default function CameraScreen() {
              <Text style={{color:'#444', marginTop:8, fontSize: 13}}>Tap '+' below to start</Text>
           </View>
         ) : (
-          <ScrollView contentContainerStyle={styles.grid} showsVerticalScrollIndicator={false}>
+          <ScrollView contentContainerStyle={[styles.grid, { paddingBottom: insets.bottom + 100 }]} showsVerticalScrollIndicator={false}>
              {pages.map((p, index) => (
                <TouchableOpacity key={index} onPress={() => setReviewIndex(index)} style={styles.gridItem}>
                  <Image 
@@ -163,23 +185,24 @@ export default function CameraScreen() {
       </View>
 
       {/* BOTTOM ACTION BAR */}
-      <SafeAreaView style={styles.bottomBar} edges={['bottom']}>
-        <TouchableOpacity onPress={pickImage} style={styles.subBtn}>
+      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 20 }]}>
+        <TouchableOpacity accessibilityLabel="Pick from gallery" onPress={pickImage} style={styles.subBtn}>
           <Ionicons name="images" size={24} color="white" />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={launchSystemCamera} style={styles.captureBtn}>
+        <TouchableOpacity accessibilityLabel="Take photo" onPress={launchSystemCamera} style={styles.captureBtn}>
           <Ionicons name="add" size={40} color="black" />
         </TouchableOpacity>
 
         <TouchableOpacity 
+          accessibilityLabel="Done scanning"
           onPress={handleDone} 
           style={[styles.doneBtn, pages.length > 0 ? styles.doneActive : styles.doneInactive]}
           disabled={pages.length === 0}
         >
           <Ionicons name="checkmark" size={28} color={pages.length > 0 ? "white" : "#666"} />
         </TouchableOpacity>
-      </SafeAreaView>
+      </View>
 
       {/* REVIEW MODAL */}
       <Modal visible={reviewIndex !== null} transparent={true} animationType="fade">
@@ -193,13 +216,13 @@ export default function CameraScreen() {
               />
             )}
             <View style={styles.modalControls}>
-              <TouchableOpacity onPress={() => setReviewIndex(null)} style={styles.controlBtn}>
+              <TouchableOpacity accessibilityLabel="Close review" onPress={() => setReviewIndex(null)} style={styles.controlBtn}>
                 <Ionicons name="close" size={24} color="white" />
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleRotate} style={styles.controlBtn}>
+              <TouchableOpacity accessibilityLabel="Rotate image" onPress={handleRotate} style={styles.controlBtn}>
                 <Ionicons name="refresh" size={24} color="white" />
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleDelete} style={[styles.controlBtn, {backgroundColor:'#EF4444'}]}>
+              <TouchableOpacity accessibilityLabel="Delete page" onPress={handleDelete} style={[styles.controlBtn, {backgroundColor:'#EF4444'}]}>
                 <Ionicons name="trash" size={24} color="white" />
               </TouchableOpacity>
             </View>
@@ -207,6 +230,7 @@ export default function CameraScreen() {
         </View>
       </Modal>
 
+      <CustomAlert {...alertState} onClose={closeAlert} />
     </View>
   );
 }
@@ -216,9 +240,9 @@ const styles = StyleSheet.create({
   
   topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 10 },
   iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: '#333', borderRadius: 22 },
-  headerTitle: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  headerTitle: { color: colors.background.normal, fontSize: 16, fontWeight: 'bold' },
 
-  mainArea: { flex: 1, backgroundColor: '#111' },
+  mainArea: { flex: 1, backgroundColor: colors.label.normal },
   centerMsg: { flex: 1, justifyContent: 'center', alignItems: 'center', opacity: 0.8 },
   
   grid: { flexDirection: 'row', flexWrap: 'wrap', padding: 15, gap: 15 },
@@ -238,16 +262,16 @@ const styles = StyleSheet.create({
   
   gridThumb: { width: '100%', height: '100%' },
   
-  badge: { position: 'absolute', top: 6, right: 6, backgroundColor: '#2563EB', width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'rgba(0,0,0,0.5)' },
-  badgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
+  badge: { position: 'absolute', top: 6, right: 6, backgroundColor: colors.primary.normal, width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'rgba(0,0,0,0.5)' },
+  badgeText: { color: colors.background.normal, fontSize: 10, fontWeight: 'bold' },
 
   bottomBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 40, paddingVertical: 20, backgroundColor: 'black' },
   
   subBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#222', justifyContent: 'center', alignItems: 'center' },
-  captureBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: 'white', justifyContent: 'center', alignItems: 'center' },
+  captureBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: colors.background.normal, justifyContent: 'center', alignItems: 'center' },
   
   doneBtn: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },
-  doneActive: { backgroundColor: '#2563EB' },
+  doneActive: { backgroundColor: colors.primary.normal },
   doneInactive: { backgroundColor: '#222' },
 
   modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' },

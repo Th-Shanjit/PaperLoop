@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
 import { 
   View, Text, TextInput, TouchableOpacity, FlatList, Image,
-  StyleSheet, StatusBar, Alert, KeyboardAvoidingView, Platform, Switch, ActivityIndicator, Modal, ScrollView
+  StyleSheet, StatusBar, Alert, KeyboardAvoidingView, Platform, Switch, ActivityIndicator, Modal, ScrollView, ViewToken
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
@@ -15,12 +15,16 @@ import * as MediaLibrary from 'expo-media-library';
 import Purchases from 'react-native-purchases';
 import Constants from 'expo-constants';
 import { transcribeHandwriting, transcribeFormulaSnippet } from '../core/services/gemini'; 
-import { saveProject, getProject, ExamProject, Section, Question, checkScanEligibility, deductScanToken, purchaseTokens, getAppSettings } from '../core/services/storage'; 
+import { saveProject, getProject, ExamProject, Section, Question, checkScanEligibility, deductScanToken, purchaseTokens, getAppSettings, saveAppSettings } from '../core/services/storage'; 
 import { purchaseScanPack } from '../core/services/purchases';
 import { generateExamHtml } from '../core/services/pdf';
 import * as Haptics from 'expo-haptics';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import SpotlightTour, { TourStep } from '../components/SpotlightTour';
+import { usePostHog } from 'posthog-react-native';
+import { colors, typography, spacing, radii, shadows } from '../core/theme';
 
 // --- HELPERS ---
 const LAYOUT_CYCLE: Record<string, '1-column' | '2-column' | '3-column'> = {
@@ -34,23 +38,68 @@ const LAYOUT_LABEL: Record<string, string> = {
   '3-column': '3 Col',
 };
 
+const EDITOR_TOUR_STEPS: TourStep[] = [
+  {
+    refKey: 'toggleContainer',
+    title: 'Edit & Preview',
+    description: 'Switch to Preview mode to see exactly how your final paper will look before exporting. Tap Edit to come back and make changes.',
+    tooltipPosition: 'bottom',
+  },
+  {
+    refKey: 'guideBtn',
+    title: 'Format Guide',
+    description: 'Tap the book icon anytime to open the full formatting reference — bold, italic, MCQ layouts, column controls, and more.',
+    tooltipPosition: 'bottom',
+  },
+  {
+    refKey: 'bottomBar',
+    title: 'Your Action Bar',
+    description: 'The three key actions: Save your draft so you never lose work, Add a new question to the last section, or Export the finished PDF.',
+    tooltipPosition: 'top',
+  },
+  {
+    refKey: 'sectionTools',
+    title: 'Section Controls',
+    description: 'Each section has its own layout. Tap the column badge to switch between 1, 2, or 3 columns on the PDF. The line icon adds a divider above it.',
+    tooltipPosition: 'bottom',
+  },
+  {
+    refKey: 'typeBadge',
+    title: 'Question Type',
+    description: 'Tap this badge to change the type of a question. TEXT is a plain question, MCQ adds answer options A/B/C/D, and INSTR creates a bold subheading across all columns.',
+    tooltipPosition: 'bottom',
+  },
+  {
+    refKey: 'formatToolbar',
+    title: 'Format Toolbar',
+    description: 'Select text in the question box first, then tap Bold, Italic, or ___ to format it. The \\ce{} button renders chemical formulae like H₂O correctly in the PDF.',
+    tooltipPosition: 'top',
+  },
+  {
+    refKey: 'qFooter',
+    title: 'Marks per Question',
+    description: 'Type the marks for each question here. They appear next to the question on the final PDF. Leave blank for untimed or unweighted questions.',
+    tooltipPosition: 'top',
+  },
+];
+
 // --- SUB-COMPONENTS ---
 const HeaderEditor = memo(({ header, onChange }: { header: any, onChange: (h: any) => void }) => (
   <View style={styles.headerCard}>
-    <TextInput style={styles.schoolInput} value={header.schoolName} onChangeText={t => onChange({...header, schoolName: t})} placeholder="SCHOOL NAME" placeholderTextColor="#9CA3AF" />
-    <TextInput style={styles.titleInput} value={header.title} onChangeText={t => onChange({...header, title: t})} placeholder="EXAM TITLE" placeholderTextColor="#9CA3AF" />
-    <TextInput style={styles.classInput} value={header.className} onChangeText={t => onChange({...header, className: t})} placeholder="Subject / Class (e.g., Physics XII-A)" placeholderTextColor="#9CA3AF" />
+    <TextInput style={styles.schoolInput} value={header.schoolName} onChangeText={t => onChange({...header, schoolName: t})} placeholder="SCHOOL NAME" placeholderTextColor={colors.label.assistive} />
+    <TextInput style={styles.titleInput} value={header.title} onChangeText={t => onChange({...header, title: t})} placeholder="EXAM TITLE" placeholderTextColor={colors.label.assistive} />
+    <TextInput style={styles.classInput} value={header.className} onChangeText={t => onChange({...header, className: t})} placeholder="Subject / Class (e.g., Physics XII-A)" placeholderTextColor={colors.label.assistive} />
     <View style={styles.metaRow}>
-      <View style={styles.metaBox}><Text style={styles.label}>DURATION</Text><TextInput style={styles.metaInput} value={header.duration} onChangeText={t => onChange({...header, duration: t})} placeholder="e.g. 2 Hours" placeholderTextColor="#9CA3AF" /></View>
-      <View style={styles.metaBox}><Text style={styles.label}>MARKS</Text><TextInput style={styles.metaInput} value={header.totalMarks} onChangeText={t => onChange({...header, totalMarks: t})} placeholder="e.g. 100" placeholderTextColor="#9CA3AF" keyboardType="numeric" /></View>
+      <View style={styles.metaBox}><Text style={styles.label}>DURATION</Text><TextInput style={styles.metaInput} value={header.duration} onChangeText={t => onChange({...header, duration: t})} placeholder="e.g. 2 Hours" placeholderTextColor={colors.label.assistive} /></View>
+      <View style={styles.metaBox}><Text style={styles.label}>MARKS</Text><TextInput style={styles.metaInput} value={header.totalMarks} onChangeText={t => onChange({...header, totalMarks: t})} placeholder="e.g. 100" placeholderTextColor={colors.label.assistive} keyboardType="numeric" /></View>
     </View>
-    <View style={styles.instructionBox}><Text style={styles.label}>INSTRUCTIONS</Text><TextInput style={styles.instInput} value={header.instructions} onChangeText={t => onChange({...header, instructions: t})} multiline placeholder="Enter instructions here..." placeholderTextColor="#9CA3AF" /></View>
+    <View style={styles.instructionBox}><Text style={styles.label}>INSTRUCTIONS</Text><TextInput style={styles.instInput} value={header.instructions} onChangeText={t => onChange({...header, instructions: t})} multiline placeholder="Enter instructions here..." placeholderTextColor={colors.label.assistive} /></View>
   </View>
 ));
 
 const QuestionCard = memo(({ 
   item, sectionId, allSections, onUpdate, onDelete, onMove, onPickDiagram, onMoveToSection,
-  isSelectMode, isSelected, onToggleSelect
+  isSelectMode, isSelected, onToggleSelect, onRegisterRefs
 }: { 
   item: Question, sectionId: string, 
   allSections: { id: string; title: string }[],
@@ -59,9 +108,26 @@ const QuestionCard = memo(({
   onMove: (sId: string, qId: string, dir: 'up' | 'down') => void,
   onPickDiagram: (sId: string, qId: string) => void,
   onMoveToSection: (fromSecId: string, qId: string, toSecId: string) => void,
-  isSelectMode: boolean, isSelected: boolean, onToggleSelect: (qId: string) => void
+  isSelectMode: boolean, isSelected: boolean, onToggleSelect: (qId: string) => void,
+  onRegisterRefs?: (refs: { typeBadge: any; formatToolbar: any; qFooter: any }) => void,
 }) => {
   const [showMoveMenu, setShowMoveMenu] = useState(false);
+  const typeBadgeRef = useRef<any>(null);
+  const formatToolbarRef = useRef<any>(null);
+  const qFooterRef = useRef<any>(null);
+  useEffect(() => {
+    if (onRegisterRefs) {
+      // Delay so layout is settled before measuring
+      const t = setTimeout(() => {
+        onRegisterRefs({
+          typeBadge: typeBadgeRef.current,
+          formatToolbar: formatToolbarRef.current,
+          qFooter: qFooterRef.current,
+        });
+      }, 200);
+      return () => clearTimeout(t);
+    }
+  }, []);
   const [showTypeMenu, setShowTypeMenu] = useState(false);
   const [showSnippetMenu, setShowSnippetMenu] = useState(false);
   const [isSnipping, setIsSnipping] = useState(false);
@@ -124,15 +190,16 @@ const QuestionCard = memo(({
       <View style={styles.qHeader}>
         <View style={{flexDirection:'row', alignItems:'center', gap: 12}}>
           {isSelectMode && (
-            <Ionicons name={isSelected ? "checkbox" : "square-outline"} size={24} color={isSelected ? "#2563EB" : "#9CA3AF"} />
+            <Ionicons name={isSelected ? "checkbox" : "square-outline"} size={24} color={isSelected ? colors.primary.normal : colors.label.assistive} />
           )}
           {!isInstruction && (
             <View style={styles.numTag}>
-              <TextInput style={styles.numInput} value={item.number} onChangeText={t => onUpdate(sectionId, item.id, 'number', t)} placeholder="#" placeholderTextColor="#888" editable={!isSelectMode} />
+              <TextInput style={styles.numInput} value={item.number} onChangeText={t => onUpdate(sectionId, item.id, 'number', t)} placeholder="#" placeholderTextColor={colors.label.assistive} editable={!isSelectMode} />
             </View>
           )}
           {/* THE TRIGGER BADGE */}
           <TouchableOpacity 
+            ref={typeBadgeRef}
             onPress={() => setShowTypeMenu(true)} 
             disabled={isSelectMode} 
             style={[
@@ -141,25 +208,25 @@ const QuestionCard = memo(({
               { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10 }
             ]}
           >
-            <Text style={[styles.typeText, (item.type === 'mcq' || isInstruction) && {color:'white'}]}>
+            <Text style={[styles.typeText, (item.type === 'mcq' || isInstruction) && {color: colors.background.normal}]}>
               {isInstruction ? 'INSTR' : item.type === 'mcq' ? 'MCQ' : 'TEXT'}
             </Text>
             <Ionicons 
               name="chevron-down" 
               size={12} 
-              color={(item.type === 'mcq' || isInstruction) ? 'white' : '#2563EB'} 
+              color={(item.type === 'mcq' || isInstruction) ? colors.background.normal : colors.primary.normal} 
             />
           </TouchableOpacity>
         </View>
 
         {!isSelectMode && (
           <View style={styles.toolRow}>
-            <TouchableOpacity onPress={() => onMove(sectionId, item.id, 'up')} style={styles.toolBtn}><Ionicons name="arrow-up" size={16} color="#555" /></TouchableOpacity>
-            <TouchableOpacity onPress={() => onMove(sectionId, item.id, 'down')} style={styles.toolBtn}><Ionicons name="arrow-down" size={16} color="#555" /></TouchableOpacity>
+            <TouchableOpacity onPress={() => onMove(sectionId, item.id, 'up')} style={styles.toolBtn} accessibilityLabel="Move question up"><Ionicons name="arrow-up" size={16} color={colors.label.alternative} /></TouchableOpacity>
+            <TouchableOpacity onPress={() => onMove(sectionId, item.id, 'down')} style={styles.toolBtn} accessibilityLabel="Move question down"><Ionicons name="arrow-down" size={16} color={colors.label.alternative} /></TouchableOpacity>
             {otherSections.length > 0 && (
-              <TouchableOpacity onPress={() => setShowMoveMenu(true)} style={[styles.toolBtn, {backgroundColor:'#EFF6FF'}]}><Ionicons name="swap-horizontal" size={16} color="#2563EB" /></TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowMoveMenu(true)} style={[styles.toolBtn, {backgroundColor: colors.accent.blue.bg}]} accessibilityLabel="Move to another section"><Ionicons name="swap-horizontal" size={16} color={colors.primary.normal} /></TouchableOpacity>
             )}
-            <TouchableOpacity onPress={() => onDelete(sectionId, item.id)} style={[styles.toolBtn, {backgroundColor:'#fee2e2'}]}><Ionicons name="trash" size={16} color="#dc2626" /></TouchableOpacity>
+            <TouchableOpacity onPress={() => onDelete(sectionId, item.id)} style={[styles.toolBtn, {backgroundColor: colors.status.negativeBg}]} accessibilityLabel="Delete question"><Ionicons name="trash" size={16} color={colors.status.negative} /></TouchableOpacity>
           </View>
         )}
       </View>
@@ -178,18 +245,19 @@ const QuestionCard = memo(({
         {/* THE SNIPPET BUTTON (Moved to top-right so it stays out of the way) */}
         {!isInstruction && !item.hideText && !isSelectMode && (
           <TouchableOpacity 
-            style={{ position: 'absolute', right: 5, top: 5, backgroundColor: '#EFF6FF', padding: 6, borderRadius: 8 }}
+            style={{ position: 'absolute', right: 5, top: 5, backgroundColor: colors.accent.blue.bg, padding: 6, borderRadius: 8 }}
             onPress={() => setShowSnippetMenu(true)}
             disabled={isSnipping}
+            accessibilityLabel="Add formula snippet"
           >
-            {isSnipping ? <ActivityIndicator size="small" color="#2563EB" /> : <Ionicons name="camera" size={18} color="#2563EB" />}
+            {isSnipping ? <ActivityIndicator size="small" color={colors.primary.normal} /> : <Ionicons name="camera" size={18} color={colors.primary.normal} />}
           </TouchableOpacity>
         )}
       </View>
 
       {/* THE QUICK FORMAT TOOLBAR */}
       {!item.hideText && !isSelectMode && (
-        <View style={styles.formatToolbar}>
+        <View ref={formatToolbarRef} collapsable={false} style={styles.formatToolbar}>
           <TouchableOpacity style={styles.formatBtn} onPress={() => applyFormatting('**', '**', 'bold')}>
             <Text style={[styles.formatBtnText, {fontWeight: 'bold'}]}>B</Text>
           </TouchableOpacity>
@@ -228,7 +296,7 @@ const QuestionCard = memo(({
                   newOptions.splice(idx, 1);
                   onUpdate(sectionId, item.id, 'options', newOptions);
                 }} style={{ padding: 8 }}>
-                  <Ionicons name="close" size={18} color="#9CA3AF" />
+                  <Ionicons name="close" size={18} color={colors.label.assistive} />
                 </TouchableOpacity>
               )}
             </View>
@@ -244,7 +312,7 @@ const QuestionCard = memo(({
                }} 
                style={styles.addOptionBtn}
              >
-               <Ionicons name="add" size={16} color="#2563EB" />
+               <Ionicons name="add" size={16} color={colors.primary.normal} />
                <Text style={styles.addOptionText}>Add Option</Text>
              </TouchableOpacity>
           )}
@@ -258,29 +326,29 @@ const QuestionCard = memo(({
             onPress={() => !isSelectMode && onPickDiagram(sectionId, item.id)} 
             style={[styles.addDiagramBtn, item.localUri === "NEEDS_CROP" && styles.addDiagramBtnHighlight]}
           >
-             <Ionicons name={item.localUri === "NEEDS_CROP" ? "scan-outline" : "image-outline"} size={18} color={item.localUri === "NEEDS_CROP" ? "#2563EB" : "#6B7280"} />
+             <Ionicons name={item.localUri === "NEEDS_CROP" ? "scan-outline" : "image-outline"} size={18} color={item.localUri === "NEEDS_CROP" ? colors.primary.normal : colors.label.alternative} />
              <Text style={[styles.addDiagramText, item.localUri === "NEEDS_CROP" && styles.addDiagramTextHighlight]}>
                {item.localUri === "NEEDS_CROP" ? "AI Detected Diagram (Tap to crop)" : "Add Diagram"}
              </Text>
           </TouchableOpacity>
         ) : (
           <View>
-            <Image source={{ uri: item.localUri }} style={[styles.qImage, item.hideText && {borderColor:'#2563EB', borderWidth:2}]} resizeMode="contain" />
+            <Image source={{ uri: item.localUri }} style={[styles.qImage, item.hideText && {borderColor: colors.primary.normal, borderWidth:2}]} resizeMode="contain" />
              <View style={styles.diagramControl}>
                <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
                   <Text style={styles.ctrlSub}>Settings</Text>
                   <View style={{flexDirection:'row', gap:8, alignItems: 'center'}}>
                     <TouchableOpacity onPress={() => !isSelectMode && onPickDiagram(sectionId, item.id)} style={{marginRight: 4}}>
-                      <Ionicons name="crop" size={18} color="#2563EB" />
+                      <Ionicons name="crop" size={18} color={colors.primary.normal} />
                     </TouchableOpacity>
                     {(['S','M','L'] as const).map(sz => (
                       <TouchableOpacity key={sz} disabled={isSelectMode} onPress={() => onUpdate(sectionId, item.id, 'diagramSize', sz)} style={[styles.sizeBadge, currentSize === sz && styles.sizeBadgeActive]}>
                         <Text style={[styles.sizeText, currentSize === sz && styles.sizeTextActive]}>{sz}</Text>
                       </TouchableOpacity>
                     ))}
-                    <View style={{width:1, height:16, backgroundColor:'#ddd', marginHorizontal:2}} />
-                    <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>HIDE</Text><Switch value={item.hideText} onValueChange={v => onUpdate(sectionId, item.id, 'hideText', v)} disabled={isSelectMode} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
-                    <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>FULL</Text><Switch value={item.isFullWidth} onValueChange={v => onUpdate(sectionId, item.id, 'isFullWidth', v)} disabled={isSelectMode} trackColor={{false:"#e5e7eb",true:"#2563EB"}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
+                    <View style={{width:1, height:16, backgroundColor: colors.line.normal, marginHorizontal:2}} />
+                    <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>HIDE</Text><Switch value={item.hideText} onValueChange={v => onUpdate(sectionId, item.id, 'hideText', v)} disabled={isSelectMode} trackColor={{false: colors.line.normal, true: colors.primary.normal}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
+                    <View style={{alignItems:'center'}}><Text style={{fontSize:8}}>FULL</Text><Switch value={item.isFullWidth} onValueChange={v => onUpdate(sectionId, item.id, 'isFullWidth', v)} disabled={isSelectMode} trackColor={{false: colors.line.normal, true: colors.primary.normal}} style={{transform:[{scaleX:.6},{scaleY:.6}]}}/></View>
                   </View>
                </View>
             </View>
@@ -289,7 +357,7 @@ const QuestionCard = memo(({
       )}
 
       {!isInstruction && (
-        <View style={styles.qFooter}><Text style={styles.markLabel}>Marks</Text><TextInput style={styles.markInput} value={item.marks} onChangeText={t => onUpdate(sectionId, item.id, 'marks', t)} keyboardType="numeric" placeholder="-" placeholderTextColor="#bbb" editable={!isSelectMode}/></View>
+        <View ref={qFooterRef} collapsable={false} style={styles.qFooter}><Text style={styles.markLabel}>Marks</Text><TextInput style={styles.markInput} value={item.marks} onChangeText={t => onUpdate(sectionId, item.id, 'marks', t)} keyboardType="numeric" placeholder="-" placeholderTextColor={colors.label.assistive} editable={!isSelectMode}/></View>
       )}
 
       {/* MOVE MODAL */}
@@ -300,7 +368,7 @@ const QuestionCard = memo(({
             {otherSections.map(s => (
               <TouchableOpacity key={s.id} style={styles.menuItem} onPress={() => { onMoveToSection(sectionId, item.id, s.id); setShowMoveMenu(false); }}>
                 <Text style={styles.menuText}>{s.title}</Text>
-                <Ionicons name="arrow-forward" size={14} color="#2563EB" />
+                <Ionicons name="arrow-forward" size={14} color={colors.primary.normal} />
               </TouchableOpacity>
             ))}
           </View>
@@ -327,14 +395,14 @@ const QuestionCard = memo(({
                 }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <Ionicons name={opt.icon as any} size={18} color={item.type === opt.id ? '#2563EB' : '#6B7280'} />
+                  <Ionicons name={opt.icon as any} size={18} color={item.type === opt.id ? colors.primary.normal : colors.label.alternative} />
                   <Text style={[styles.dropdownItemText, item.type === opt.id && styles.dropdownItemTextActive]}>
                     {opt.label}
                   </Text>
                 </View>
                 {/* The Checkmark for the currently selected option */}
                 {item.type === opt.id && (
-                  <Ionicons name="checkmark-circle" size={20} color="#2563EB" />
+                  <Ionicons name="checkmark-circle" size={20} color={colors.primary.normal} />
                 )}
               </TouchableOpacity>
             ))}
@@ -354,7 +422,7 @@ const QuestionCard = memo(({
               processSnippet(result);
             }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Ionicons name="camera" size={18} color="#6B7280" />
+                <Ionicons name="camera" size={18} color={colors.label.alternative} />
                 <Text style={styles.dropdownItemText}>Take Photo</Text>
               </View>
             </TouchableOpacity>
@@ -365,7 +433,7 @@ const QuestionCard = memo(({
               processSnippet(result);
             }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Ionicons name="images" size={18} color="#6B7280" />
+                <Ionicons name="images" size={18} color={colors.label.alternative} />
                 <Text style={styles.dropdownItemText}>Choose from Gallery</Text>
               </View>
             </TouchableOpacity>
@@ -388,52 +456,85 @@ const QuestionCard = memo(({
 const SectionCard = memo(({ 
   section, index, allSections, onUpdateSection, onDeleteSection, 
   onUpdateQ, onDeleteQ, onMoveQ, onAddQ, onPasteScan, onPickDiagram, onMoveToSection, onRescanSection,
-  isSelectMode, selectedIds, onToggleSelect
+  isSelectMode, selectedIds, onToggleSelect, onRegisterSectionRef, onRegisterQuestionRefs
 }: { 
   section: Section, index: number, 
   allSections: { id: string; title: string }[],
   onUpdateSection: (id: string, field: keyof Section, val: any) => void,
   onDeleteSection: (id: string) => void,
   onUpdateQ: any, onDeleteQ: any, onMoveQ: any, onAddQ: any, onPasteScan: any, onPickDiagram: any, onMoveToSection: any, onRescanSection: (secId: string, currentRescans?: number) => void,
-  isSelectMode: boolean, selectedIds: Set<string>, onToggleSelect: (qId: string) => void
-}) => (
+  isSelectMode: boolean, selectedIds: Set<string>, onToggleSelect: (qId: string) => void,
+  onRegisterSectionRef?: (ref: any) => void,
+  onRegisterQuestionRefs?: (refs: { typeBadge: any; formatToolbar: any; qFooter: any }) => void,
+}) => {
+  const sectionToolsRef = useRef<any>(null);
+  const [showSourcePreview, setShowSourcePreview] = useState(false);
+  useEffect(() => {
+    if (onRegisterSectionRef) {
+      const t = setTimeout(() => onRegisterSectionRef(sectionToolsRef.current), 200);
+      return () => clearTimeout(t);
+    }
+  }, []);
+  return (
   <View style={styles.sectionContainer}>
     <View style={styles.sectionHeader}>
-      <TextInput style={styles.sectionTitleInput} value={section.title} onChangeText={t => onUpdateSection(section.id, 'title', t)} placeholder="Section Title" editable={!isSelectMode} />
-      <View style={styles.sectionTools}>
-         <TouchableOpacity onPress={() => onUpdateSection(section.id, 'showDivider', !section.showDivider)} style={[styles.dividerBadge, section.showDivider && styles.dividerBadgeActive]} disabled={isSelectMode}>
-            <Ionicons name="remove" size={14} color={section.showDivider ? "white" : "#555"} />
+      <TextInput style={styles.sectionTitleInput} value={section.title} onChangeText={t => onUpdateSection(section.id, 'title', t)} placeholder="Section Title" placeholderTextColor={colors.label.assistive} editable={!isSelectMode} />
+      <View ref={sectionToolsRef} collapsable={false} style={styles.sectionTools}>
+         <TouchableOpacity onPress={() => onUpdateSection(section.id, 'showDivider', !section.showDivider)} style={[styles.dividerBadge, section.showDivider && styles.dividerBadgeActive]} disabled={isSelectMode} accessibilityLabel="Toggle section divider">
+            <Ionicons name="remove" size={14} color={section.showDivider ? colors.background.normal : colors.label.alternative} />
          </TouchableOpacity>
          <TouchableOpacity onPress={() => onUpdateSection(section.id, 'layout', LAYOUT_CYCLE[section.layout] || '1-column')} style={[styles.layoutBadge, section.layout !== '1-column' && styles.layoutBadgeActive]} disabled={isSelectMode}>
-            <Text style={[styles.layoutText, section.layout !== '1-column' && {color:'white'}]}>{LAYOUT_LABEL[section.layout] || '1 Col'}</Text>
+            <Text style={[styles.layoutText, section.layout !== '1-column' && {color: colors.background.normal}]}>{LAYOUT_LABEL[section.layout] || '1 Col'}</Text>
          </TouchableOpacity>
-         {/* THE NEW RESCAN BUTTON */}
-         <TouchableOpacity onPress={() => onRescanSection(section.id, section.rescanCount)} style={[styles.layoutBadge, { backgroundColor: '#DBEAFE' }]} disabled={isSelectMode}>
-            <Ionicons name="refresh" size={14} color="#2563EB" />
+         <TouchableOpacity onPress={() => onRescanSection(section.id, section.rescanCount)} style={[styles.layoutBadge, { backgroundColor: colors.accent.blue.bgStrong }]} disabled={isSelectMode} accessibilityLabel="Rescan section">
+            <Ionicons name="refresh" size={14} color={colors.primary.normal} />
          </TouchableOpacity>
-         <TouchableOpacity onPress={() => onDeleteSection(section.id)} style={styles.delSectionBtn} disabled={isSelectMode}><Ionicons name="close" size={16} color="#ef4444" /></TouchableOpacity>
+         {section.sourceImageUri && (
+           <TouchableOpacity onPress={() => setShowSourcePreview(true)} style={styles.sourceThumb}>
+             <Image source={{ uri: section.sourceImageUri }} style={styles.sourceThumbImg} />
+           </TouchableOpacity>
+         )}
+         <TouchableOpacity onPress={() => onDeleteSection(section.id)} style={styles.delSectionBtn} disabled={isSelectMode} accessibilityLabel="Delete section"><Ionicons name="close" size={16} color={colors.status.negative} /></TouchableOpacity>
       </View>
     </View>
     
     {section.questions.map((q, idx) => (
-      <QuestionCard key={q.id} item={q} sectionId={section.id} allSections={allSections} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} onPickDiagram={onPickDiagram} onMoveToSection={onMoveToSection} isSelectMode={isSelectMode} isSelected={selectedIds.has(q.id)} onToggleSelect={onToggleSelect}/>
+      <QuestionCard key={q.id} item={q} sectionId={section.id} allSections={allSections} onUpdate={onUpdateQ} onDelete={onDeleteQ} onMove={onMoveQ} onPickDiagram={onPickDiagram} onMoveToSection={onMoveToSection} isSelectMode={isSelectMode} isSelected={selectedIds.has(q.id)} onToggleSelect={onToggleSelect} onRegisterRefs={idx === 0 ? onRegisterQuestionRefs : undefined}/>
       ))}
 
     <View style={styles.sectionFooter}>
-       <TouchableOpacity onPress={() => onPasteScan(section.id)} style={styles.secActionBtn} disabled={isSelectMode}><Ionicons name="camera" size={16} color="#2563EB" /><Text style={styles.secActionText}>Scan</Text></TouchableOpacity>
-       <TouchableOpacity onPress={() => onAddQ(section.id)} style={styles.secActionBtn} disabled={isSelectMode}><Ionicons name="add" size={16} color="#2563EB" /><Text style={styles.secActionText}>Question</Text></TouchableOpacity>
+       <TouchableOpacity onPress={() => onPasteScan(section.id)} style={styles.secActionBtn} disabled={isSelectMode}><Ionicons name="camera" size={16} color={colors.primary.normal} /><Text style={styles.secActionText}>Scan</Text></TouchableOpacity>
+       <TouchableOpacity onPress={() => onAddQ(section.id)} style={styles.secActionBtn} disabled={isSelectMode}><Ionicons name="add" size={16} color={colors.primary.normal} /><Text style={styles.secActionText}>Question</Text></TouchableOpacity>
     </View>
+
+    {/* Source image full-screen preview */}
+    <Modal visible={showSourcePreview} transparent animationType="fade">
+      <View style={styles.sourcePreviewOverlay}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setShowSourcePreview(false)} activeOpacity={1} />
+        <View style={styles.sourcePreviewContainer}>
+          {section.sourceImageUri && (
+            <Image source={{ uri: section.sourceImageUri }} style={styles.sourcePreviewImage} resizeMode="contain" />
+          )}
+          <TouchableOpacity onPress={() => setShowSourcePreview(false)} style={styles.sourcePreviewClose} accessibilityLabel="Close preview">
+            <Ionicons name="close" size={24} color={colors.label.strong} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
   </View>
-));
+  );
+});
 
 // --- MAIN SCREEN ---
 
 export default function EditorScreen() {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const navigation = useNavigation();
+  const posthog = usePostHog();
   const { alertState, showAlert, closeAlert } = useCustomAlert();
-  const params = useLocalSearchParams(); 
-  
+  const params = useLocalSearchParams();
+
   const projectId = Array.isArray(params.projectId) ? params.projectId[0] : params.projectId;
   const initialData = Array.isArray(params.initialData) ? params.initialData[0] : params.initialData;
 
@@ -459,10 +560,70 @@ export default function EditorScreen() {
   const [showBulkMoveMenu, setShowBulkMoveMenu] = useState(false);
   const [showFormatGuide, setShowFormatGuide] = useState(false);
   const [guideTab, setGuideTab] = useState<'format' | 'layout' | 'tools'>('format');
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
 
   // --- NEW: STOP LOSS STATE TRACKERS ---
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const latestState = useRef({ sections, header, fontTheme, currentProjectId });
+
+  // --- SECTION NAVIGATOR ---
+  const listRef = useRef<FlatList>(null);
+  const [activeSectionIndex, setActiveSectionIndex] = useState(0);
+  const navScrollRef = useRef<ScrollView>(null);
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    if (viewableItems.length > 0) {
+      const first = viewableItems[0];
+      if (first.index != null) setActiveSectionIndex(first.index);
+    }
+  }).current;
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 30 }).current;
+
+  const handleScrollToIndexFailed = useCallback(
+    (info: { index: number; averageItemLength: number; highestMeasuredFrameIndex: number }) => {
+      setTimeout(() => {
+        listRef.current?.scrollToIndex({ index: info.index, animated: true });
+      }, 300);
+    },
+    [],
+  );
+
+  // --- SPOTLIGHT TOUR ---
+  const [showTour, setShowTour] = useState(false);
+  const tourBottomBarRef = useRef<any>(null);
+  const tourToggleRef = useRef<any>(null);
+  const tourGuideBtnRef = useRef<any>(null);
+  const tourSubRefsMap = useRef<Record<string, React.RefObject<any>>>({});
+
+  const registerTourQuestionRefs = useCallback((refs: { typeBadge: any; formatToolbar: any; qFooter: any }) => {
+    if (refs.typeBadge && !tourSubRefsMap.current.typeBadge) {
+      tourSubRefsMap.current.typeBadge = { current: refs.typeBadge };
+    }
+    if (refs.formatToolbar && !tourSubRefsMap.current.formatToolbar) {
+      tourSubRefsMap.current.formatToolbar = { current: refs.formatToolbar };
+    }
+    if (refs.qFooter && !tourSubRefsMap.current.qFooter) {
+      tourSubRefsMap.current.qFooter = { current: refs.qFooter };
+    }
+  }, []);
+
+  const registerTourSectionRef = useCallback((ref: any) => {
+    if (ref && !tourSubRefsMap.current.sectionTools) {
+      tourSubRefsMap.current.sectionTools = { current: ref };
+    }
+  }, []);
+
+  const getTourRefs = useCallback((): Record<string, React.RefObject<any>> => ({
+    toggleContainer: tourToggleRef,
+    guideBtn: tourGuideBtnRef,
+    bottomBar: tourBottomBarRef,
+    ...tourSubRefsMap.current,
+  }), []);
+
+  const handleTourFinish = useCallback(async () => {
+    setShowTour(false);
+    const settings = await getAppSettings();
+    await saveAppSettings({ ...settings, hasSeenEditorTour: true });
+  }, []);
 
 
   // Derived: lightweight section list for move-to-section picker
@@ -576,6 +737,17 @@ export default function EditorScreen() {
     init();
   }, [initialData, projectId]);
 
+  // Auto-trigger tour on first editor open
+  useEffect(() => {
+    const checkTour = async () => {
+      const settings = await getAppSettings();
+      if (!settings.hasSeenEditorTour) {
+        setTimeout(() => setShowTour(true), 900);
+      }
+    };
+    checkTour();
+  }, []);
+
   const saveToDrafts = async (secs: Section[], hd: any, ft: any) => {
     const project: ExamProject = {
       id: currentProjectId, title: hd.title, updatedAt: Date.now(),
@@ -596,11 +768,38 @@ export default function EditorScreen() {
     showAlert("Saved", "Draft updated successfully.");
   };
 
+  const wrapForPreview = (html: string): string => {
+    const previewCSS = `
+      <style>
+        @media screen {
+          @page { size: auto; margin: 0; }
+          html { background: ${colors.line.normal}; }
+          body {
+            background: ${colors.background.normal};
+            width: 210mm;
+            min-height: 297mm;
+            margin: 12mm auto;
+            padding: 15mm;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+            border-radius: 2px;
+          }
+        }
+      </style>
+      <meta name="viewport" content="width=794, initial-scale=0.45, minimum-scale=0.3, maximum-scale=3.0, user-scalable=yes" />
+    `;
+    return html.replace('</head>', previewCSS + '</head>');
+  };
+
   const handleTogglePreview = async () => {
     if (viewMode === 'edit') {
-      const html = await generateExamHtml(header, sections, fontTheme);
-      setPreviewHtml(html);
       setViewMode('preview');
+      setIsGeneratingPreview(true);
+      try {
+        const html = await generateExamHtml(header, sections, fontTheme);
+        setPreviewHtml(wrapForPreview(html));
+      } finally {
+        setIsGeneratingPreview(false);
+      }
     } else {
       setViewMode('edit');
     }
@@ -611,6 +810,9 @@ export default function EditorScreen() {
       await saveToDrafts(sections, header, fontTheme);
       const html = await generateExamHtml(header, sections, fontTheme);
       const { uri } = await Print.printToFileAsync({ html, base64: false });
+      posthog?.capture('pdf_exported', {
+        question_count: sections.reduce((n, s) => n + (s.questions?.length ?? 0), 0),
+      });
       setExportedPdfUri(uri);
       setShowExportMenu(true);
     } catch (e) { showAlert("Export Failed", "Could not generate PDF."); }
@@ -845,12 +1047,13 @@ export default function EditorScreen() {
           await deductScanToken();
         }
         
+        const scannedUri = result.assets[0].uri;
         setSections(prev => prev.map(s => {
           if (s.id === secId) {
-            // If it's a rescan, we REPLACE the old questions. Otherwise, we ADD to them.
             return { 
               ...s, 
               rescanCount: isRescan ? (s.rescanCount || 0) + 1 : s.rescanCount,
+              sourceImageUri: scannedUri,
               questions: isRescan ? newQuestions : [...s.questions, ...newQuestions] 
             };
           }
@@ -897,36 +1100,39 @@ export default function EditorScreen() {
         isSelectMode={isSelectMode}
         selectedIds={selectedIds}
         onToggleSelect={toggleSelectQuestion}
+        onRegisterSectionRef={index === 0 ? registerTourSectionRef : undefined}
+        onRegisterQuestionRefs={index === 0 ? registerTourQuestionRefs : undefined}
     />
-  ), [sectionList, updateSection, deleteSection, updateQ, deleteQ, moveQ, addQ, handleScanToSection, handlePickDiagram, moveToSection, handleRescanSection, isSelectMode, selectedIds, toggleSelectQuestion]);
+  ), [sectionList, updateSection, deleteSection, updateQ, deleteQ, moveQ, addQ, handleScanToSection, handlePickDiagram, moveToSection, handleRescanSection, isSelectMode, selectedIds, toggleSelectQuestion, registerTourSectionRef, registerTourQuestionRefs]);
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F3F4F6" />
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background.alternative} />
       
       {/* HEADER NAV */}
       <View style={styles.nav}>
         {/* LEFT: Home Button */}
         {/* Added pointerEvents="box-none" so the invisible flex space doesn't steal taps */}
         <View style={{ flex: 1, alignItems: 'flex-start', zIndex: 10 }} pointerEvents="box-none">
-          <TouchableOpacity onPress={() => router.replace('/')} style={styles.navBack}>
-            <Ionicons name="home-outline" size={24} color="#111" />
+          <TouchableOpacity onPress={() => router.replace('/')} style={styles.navBack} accessibilityLabel="Home">
+            <Ionicons name="home-outline" size={24} color={colors.label.normal} />
           </TouchableOpacity>
         </View>
         
-        {/* CENTER: Bumped zIndex to 20 so it sits on top of the flex shields */}
-        {/* Added flexDirection row and gap to position the Guide button next to the toggle */}
+        {/* CENTER */}
         <View style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', pointerEvents: 'box-none', zIndex: 20, gap: 12 }]}>
           
-          {/* THE NEW MASTER GUIDE BUTTON */}
+          {/* GUIDE BUTTON */}
           <TouchableOpacity 
+            ref={tourGuideBtnRef}
             onPress={() => setShowFormatGuide(true)} 
-            style={{ padding: 8, backgroundColor: '#EFF6FF', borderRadius: 20, pointerEvents: 'auto' }}
+            style={{ padding: 8, backgroundColor: colors.fill.normal, borderRadius: 20, pointerEvents: 'auto' }}
+            accessibilityLabel="Format guide"
           >
-            <Ionicons name="book-outline" size={20} color="#2563EB" />
+            <Ionicons name="book-outline" size={20} color={colors.label.normal} />
           </TouchableOpacity>
 
-          <View style={[styles.toggleContainer, { pointerEvents: 'auto' }]}>
+          <View ref={tourToggleRef} collapsable={false} style={[styles.toggleContainer, { pointerEvents: 'auto' }]}>
              <TouchableOpacity onPress={handleTogglePreview} style={[styles.toggleBtn, viewMode === 'edit' && styles.toggleActive]}>
                 <Text style={[styles.toggleText, viewMode === 'edit' && styles.toggleTextActive]}>Edit</Text>
              </TouchableOpacity>
@@ -936,13 +1142,45 @@ export default function EditorScreen() {
           </View>
         </View>
 
-        {/* RIGHT: Select Mode Toggle */}
+        {/* RIGHT: Tour + Select Mode */}
         <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 6, zIndex: 10 }} pointerEvents="box-none">
-          <TouchableOpacity onPress={() => { setIsSelectMode(!isSelectMode); setSelectedIds(new Set()); }} style={[styles.saveBtn, isSelectMode && {backgroundColor:'#2563EB'}]}>
-            <Ionicons name="checkbox-outline" size={20} color={isSelectMode ? "white" : "#2563EB"} />
+          <TouchableOpacity onPress={() => setShowTour(true)} style={styles.saveBtn} accessibilityLabel="Feature tour">
+            <Ionicons name="compass-outline" size={20} color={colors.label.normal} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { setIsSelectMode(!isSelectMode); setSelectedIds(new Set()); }} style={[styles.saveBtn, isSelectMode && {backgroundColor: colors.primary.normal}]} accessibilityLabel="Select questions">
+            <Ionicons name="checkbox-outline" size={20} color={isSelectMode ? colors.background.normal : colors.label.normal} />
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* SECTION NAVIGATOR */}
+      {viewMode === 'edit' && sections.length > 1 && (
+        <ScrollView
+          ref={navScrollRef}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.sectionNav}
+          contentContainerStyle={styles.sectionNavContent}
+        >
+          {sections.map((sec, i) => (
+            <TouchableOpacity
+              key={sec.id}
+              onPress={() => {
+                setActiveSectionIndex(i);
+                listRef.current?.scrollToIndex({ index: i, animated: true });
+              }}
+              style={[styles.sectionNavChip, i === activeSectionIndex && styles.sectionNavChipActive]}
+            >
+              <Text
+                style={[styles.sectionNavChipText, i === activeSectionIndex && styles.sectionNavChipTextActive]}
+                numberOfLines={1}
+              >
+                {(sec.title || `Section ${i + 1}`).substring(0, 14)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
 
       {/* CONTENT AREA */}
       <View style={{ flex: 1 }}>
@@ -954,16 +1192,18 @@ export default function EditorScreen() {
             style={{ flex: 1 }}
           >
             <FlatList 
+                ref={listRef}
                 data={sections} 
                 keyExtractor={item => item.id} 
                 
-                // THE iOS MAGIC PROP
                 automaticallyAdjustKeyboardInsets={true} 
                 
-                // 1. USE THE NEW MEMOIZED RENDERER
                 renderItem={renderSectionItem}
                 
-                // 2. ADD THESE 4 PERFORMANCE PROPS
+                onViewableItemsChanged={onViewableItemsChanged}
+                viewabilityConfig={viewabilityConfig}
+                onScrollToIndexFailed={handleScrollToIndexFailed}
+                
                 initialNumToRender={1}
                 maxToRenderPerBatch={2}
                 windowSize={3}
@@ -974,11 +1214,11 @@ export default function EditorScreen() {
                     <HeaderEditor header={header} onChange={setHeader} />
                     <TouchableOpacity onPress={() => setShowSettings(true)} style={styles.fontBtn}>
                        <Text style={styles.fontBtnText}>Font: {fontTheme.toUpperCase()}</Text>
-                       <Ionicons name="chevron-down" size={14} color="#555" />
+                       <Ionicons name="chevron-down" size={14} color={colors.label.alternative} />
                     </TouchableOpacity>
                   </>
                 } 
-                contentContainerStyle={styles.list} 
+                contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 100 }]} 
                 showsVerticalScrollIndicator={false} 
                 keyboardShouldPersistTaps="always"
                 ListFooterComponent={
@@ -993,14 +1233,24 @@ export default function EditorScreen() {
         ) : (
           // PREVIEW MODE (WebView)
           <View style={styles.previewContainer}>
-             <WebView 
-               originWhitelist={['*']} 
-               source={{ html: previewHtml }} 
-               style={{ flex: 1 }}
-               scalesPageToFit={false}
-             />
-             <TouchableOpacity onPress={handleExport} style={styles.fabPreview}>
-                <Ionicons name="share-outline" size={24} color="white" />
+             {isGeneratingPreview ? (
+               <View style={styles.previewLoading}>
+                 <ActivityIndicator size="large" color={colors.primary.normal} />
+                 <Text style={styles.previewLoadingText}>Generating preview…</Text>
+               </View>
+             ) : (
+               <WebView 
+                 originWhitelist={['*']} 
+                 source={{ html: previewHtml }} 
+                 style={{ flex: 1, backgroundColor: colors.line.normal }}
+                 scalesPageToFit={false}
+                 setBuiltInZoomControls={true}
+                 setDisplayZoomControls={false}
+                 allowsInlineMediaPlayback
+               />
+             )}
+             <TouchableOpacity onPress={handleExport} style={[styles.fabPreview, { bottom: insets.bottom + 30 }]} accessibilityLabel="Export PDF">
+                <Ionicons name="share-outline" size={24} color={colors.background.normal} />
                 <Text style={styles.fabText}>Export PDF</Text>
              </TouchableOpacity>
           </View>
@@ -1009,9 +1259,9 @@ export default function EditorScreen() {
 
       {/* STICKY BOTTOM ACTION BAR */}
       {viewMode === 'edit' && !isSelectMode && (
-        <View style={styles.bottomBar}>
-          <TouchableOpacity onPress={handleManualSave} style={styles.bottomBarBtn} disabled={isSaving}>
-            {isSaving ? <ActivityIndicator size="small" color="#4B5563"/> : <Ionicons name="save-outline" size={22} color="#4B5563" />}
+        <View ref={tourBottomBarRef} collapsable={false} style={styles.bottomBar}>
+          <TouchableOpacity onPress={handleManualSave} style={styles.bottomBarBtn} disabled={isSaving} accessibilityLabel="Save draft">
+            {isSaving ? <ActivityIndicator size="small" color={colors.label.alternative}/> : <Ionicons name="save-outline" size={22} color={colors.label.alternative} />}
             <Text style={styles.bottomBarText}>Save</Text>
           </TouchableOpacity>
 
@@ -1023,12 +1273,12 @@ export default function EditorScreen() {
               addSection();
             }
           }} style={styles.bottomBarBtnPrimary}>
-            <Ionicons name="add" size={22} color="white" />
+            <Ionicons name="add" size={22} color={colors.background.normal} />
             <Text style={styles.bottomBarTextPrimary}>Add Question</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={handleExport} style={styles.bottomBarBtn}>
-            <Ionicons name="share-outline" size={22} color="#4B5563" />
+          <TouchableOpacity onPress={handleExport} style={styles.bottomBarBtn} accessibilityLabel="Export PDF">
+            <Ionicons name="share-outline" size={22} color={colors.label.alternative} />
             <Text style={styles.bottomBarText}>Export</Text>
           </TouchableOpacity>
         </View>
@@ -1042,7 +1292,7 @@ export default function EditorScreen() {
             {/* Header */}
             <View style={styles.loadingHeader}>
               <View style={styles.loadingIconRing}>
-                <ActivityIndicator size="small" color="#fff" />
+                <ActivityIndicator size="small" color={colors.background.normal} />
               </View>
               <Text style={styles.loadingTitle}>Scanning Page</Text>
             </View>
@@ -1070,7 +1320,7 @@ export default function EditorScreen() {
                     {isDone
                       ? <Text style={styles.stepDotText}>✓</Text>
                       : isActive
-                        ? <ActivityIndicator size="small" color="#fff" style={{ transform: [{ scale: 0.6 }] }} />
+                        ? <ActivityIndicator size="small" color={colors.background.normal} style={{ transform: [{ scale: 0.6 }] }} />
                         : <Text style={styles.stepDotText}>{index + 1}</Text>
                     }
                   </View>
@@ -1109,7 +1359,7 @@ export default function EditorScreen() {
               ].map((f) => (
                 <TouchableOpacity key={f.id} style={styles.menuItem} onPress={() => { setFontTheme(f.id as any); setShowSettings(false); }}>
                   <Text style={styles.menuText}>{f.label}</Text>
-                  {fontTheme === f.id && <Ionicons name="checkmark" size={18} color="#2563EB"/>}
+                  {fontTheme === f.id && <Ionicons name="checkmark" size={18} color={colors.primary.normal}/>}
                 </TouchableOpacity>
               ))}
            </View>
@@ -1124,14 +1374,14 @@ export default function EditorScreen() {
             <View style={styles.exportButtons}>
               <TouchableOpacity onPress={handleDownload} style={styles.exportBtn}>
                 <View style={styles.exportIconCircle}>
-                  <Ionicons name="download" size={32} color="#2563EB" />
+                  <Ionicons name="download" size={32} color={colors.primary.normal} />
                 </View>
                 <Text style={styles.exportBtnText}>Download</Text>
                 <Text style={styles.exportBtnSub}>Save to device</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={handleShare} style={styles.exportBtn}>
                 <View style={styles.exportIconCircle}>
-                  <Ionicons name="share-social" size={32} color="#2563EB" />
+                  <Ionicons name="share-social" size={32} color={colors.primary.normal} />
                 </View>
                 <Text style={styles.exportBtnText}>Share</Text>
                 <Text style={styles.exportBtnSub}>Send via apps</Text>
@@ -1160,7 +1410,7 @@ export default function EditorScreen() {
               }
             }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Ionicons name="camera" size={18} color="#6B7280" />
+                <Ionicons name="camera" size={18} color={colors.label.alternative} />
                 <Text style={styles.dropdownItemText}>Camera</Text>
               </View>
             </TouchableOpacity>
@@ -1175,7 +1425,7 @@ export default function EditorScreen() {
               }
             }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Ionicons name="images" size={18} color="#6B7280" />
+                <Ionicons name="images" size={18} color={colors.label.alternative} />
                 <Text style={styles.dropdownItemText}>Gallery</Text>
               </View>
             </TouchableOpacity>
@@ -1209,7 +1459,7 @@ export default function EditorScreen() {
                 }
               }} style={styles.exportBtn}>
                 <View style={styles.exportIconCircle}>
-                  <Ionicons name="add-circle" size={32} color="#2563EB" />
+                  <Ionicons name="add-circle" size={32} color={colors.primary.normal} />
                 </View>
                 <Text style={styles.exportBtnText}>10 Tokens</Text>
                 <Text style={styles.exportBtnSub}>$2.99</Text>
@@ -1233,7 +1483,7 @@ export default function EditorScreen() {
                 }
               }} style={styles.exportBtn}>
                 <View style={styles.exportIconCircle}>
-                  <Ionicons name="add-circle" size={32} color="#2563EB" />
+                  <Ionicons name="add-circle" size={32} color={colors.primary.normal} />
                 </View>
                 <Text style={styles.exportBtnText}>50 Tokens</Text>
                 <Text style={styles.exportBtnSub}>$9.99</Text>
@@ -1249,7 +1499,7 @@ export default function EditorScreen() {
 
       {/* BULK ACTION BAR */}
       {isSelectMode && selectedIds.size > 0 && (
-        <View style={styles.bulkActionBar}>
+        <View style={[styles.bulkActionBar, { bottom: insets.bottom + 30 }]}>
           <Text style={styles.bulkActionText}>{selectedIds.size} Selected</Text>
           <TouchableOpacity onPress={() => setShowBulkMoveMenu(true)} style={styles.bulkActionBtn}>
             <Text style={styles.bulkActionBtnText}>Move to Section</Text>
@@ -1265,7 +1515,7 @@ export default function EditorScreen() {
             {sectionList.map(s => (
               <TouchableOpacity key={s.id} style={styles.menuItem} onPress={() => handleBulkMove(s.id)}>
                 <Text style={styles.menuText}>{s.title}</Text>
-                <Ionicons name="arrow-forward" size={14} color="#2563EB" />
+                <Ionicons name="arrow-forward" size={14} color={colors.primary.normal} />
               </TouchableOpacity>
             ))}
           </View>
@@ -1278,21 +1528,21 @@ export default function EditorScreen() {
           <View style={[styles.exportModal, { padding: 0, width: '90%', maxWidth: 420, overflow: 'hidden' }]}>
             
             {/* --- HEADER & TABS AREA --- */}
-            <View style={{ padding: 20, paddingBottom: 16, backgroundColor: '#EFF6FF', width: '100%', alignItems: 'center' }}>
+            <View style={{ padding: 20, paddingBottom: 16, backgroundColor: colors.accent.blue.bg, width: '100%', alignItems: 'center' }}>
               <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16}}>
-                <Ionicons name="book" size={24} color="#2563EB" />
+                <Ionicons name="book" size={24} color={colors.primary.normal} />
                 <Text style={[styles.exportTitle, {marginBottom: 0}]}>Editor Guide</Text>
               </View>
               
               {/* Custom Segmented Control */}
-              <View style={{flexDirection: 'row', backgroundColor: '#DBEAFE', borderRadius: 10, padding: 4, width: '100%'}}>
+              <View style={{flexDirection: 'row', backgroundColor: colors.accent.blue.bgStrong, borderRadius: 10, padding: 4, width: '100%'}}>
                 {(['format', 'layout', 'tools'] as const).map(tab => (
                   <TouchableOpacity 
                     key={tab} 
                     onPress={() => setGuideTab(tab)}
-                    style={{ flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, backgroundColor: guideTab === tab ? 'white' : 'transparent', shadowColor: guideTab === tab ? '#000' : 'transparent', shadowOpacity: 0.1, shadowRadius: 2, elevation: guideTab === tab ? 2 : 0 }}
+                    style={{ flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, backgroundColor: guideTab === tab ? colors.background.normal : 'transparent', shadowColor: guideTab === tab ? '#000' : 'transparent', shadowOpacity: 0.1, shadowRadius: 2, elevation: guideTab === tab ? 2 : 0 }}
                   >
-                    <Text style={{fontSize: 13, fontWeight: guideTab === tab ? '700' : '600', color: guideTab === tab ? '#1D4ED8' : '#60A5FA', textTransform: 'capitalize'}}>
+                    <Text style={{fontSize: 13, fontWeight: guideTab === tab ? '700' : '600', color: guideTab === tab ? colors.primary.strong : colors.primary.normal, textTransform: 'capitalize'}}>
                       {tab}
                     </Text>
                   </TouchableOpacity>
@@ -1306,30 +1556,30 @@ export default function EditorScreen() {
               {/* TAB 1: FORMATTING */}
               {guideTab === 'format' && (
                 <View style={{gap: 12}}>
-                  <Text style={{fontSize: 14, color: '#6B7280', marginBottom: 12}}>Use these codes inside question boxes to style your text.</Text>
+                  <Text style={{fontSize: 14, color: colors.label.alternative, marginBottom: 12}}>Use these codes inside question boxes to style your text.</Text>
                   
                   <View style={styles.guideRow}>
                     <View style={styles.guideCode}><Text style={styles.guideCodeText}>**text**</Text></View>
-                    <Ionicons name="arrow-forward" size={16} color="#D1D5DB" />
-                    <Text style={{fontSize: 15, fontWeight: 'bold', color: '#111'}}>Bold text</Text>
+                    <Ionicons name="arrow-forward" size={16} color={colors.interaction.inactive} />
+                    <Text style={{fontSize: 15, fontWeight: 'bold', color: colors.label.normal}}>Bold text</Text>
                   </View>
 
                   <View style={styles.guideRow}>
                     <View style={styles.guideCode}><Text style={styles.guideCodeText}>*text*</Text></View>
-                    <Ionicons name="arrow-forward" size={16} color="#D1D5DB" />
-                    <Text style={{fontSize: 15, fontStyle: 'italic', color: '#111'}}>Italic text</Text>
+                    <Ionicons name="arrow-forward" size={16} color={colors.interaction.inactive} />
+                    <Text style={{fontSize: 15, fontStyle: 'italic', color: colors.label.normal}}>Italic text</Text>
                   </View>
 
                   <View style={styles.guideRow}>
                     <View style={styles.guideCode}><Text style={styles.guideCodeText}>\ce{'{H2O}'}</Text></View>
-                    <Ionicons name="arrow-forward" size={16} color="#D1D5DB" />
-                    <Text style={{fontSize: 15, color: '#111', fontWeight: '600', letterSpacing: 0.5}}>H<Text style={{fontSize: 10, lineHeight: 18}}>2</Text>O</Text>
+                    <Ionicons name="arrow-forward" size={16} color={colors.interaction.inactive} />
+                    <Text style={{fontSize: 15, color: colors.label.normal, fontWeight: '600', letterSpacing: 0.5}}>H<Text style={{fontSize: 10, lineHeight: 18}}>2</Text>O</Text>
                   </View>
 
                   <View style={styles.guideRow}>
                     <View style={styles.guideCode}><Text style={styles.guideCodeText}>___</Text></View>
-                    <Ionicons name="arrow-forward" size={16} color="#D1D5DB" />
-                    <Text style={{fontSize: 15, color: '#111'}}>Fill in the _______</Text>
+                    <Ionicons name="arrow-forward" size={16} color={colors.interaction.inactive} />
+                    <Text style={{fontSize: 15, color: colors.label.normal}}>Fill in the _______</Text>
                   </View>
                 </View>
               )}
@@ -1337,20 +1587,20 @@ export default function EditorScreen() {
               {/* TAB 2: LAYOUT */}
               {guideTab === 'layout' && (
                 <View style={{gap: 20}}>
-                   <Text style={{fontSize: 14, color: '#6B7280', marginBottom: 4}}>Control how your PDF looks on paper.</Text>
+                   <Text style={{fontSize: 14, color: colors.label.alternative, marginBottom: 4}}>Control how your PDF looks on paper.</Text>
                    
                    <View style={styles.guideFeatureRow}>
-                     <View style={[styles.layoutBadge, {backgroundColor: '#111'}]}><Text style={{color:'white', fontSize: 10, fontWeight: '700'}}>2 Col</Text></View>
+                     <View style={[styles.layoutBadge, {backgroundColor: colors.label.normal}]}><Text style={{color: colors.background.normal, fontSize: 10, fontWeight: '700'}}>2 Col</Text></View>
                      <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Multi-Column Layout</Text><Text style={styles.guideFeatureDesc}>Tap this badge on a Section Header to pack more questions onto a single page using 2 or 3 columns.</Text></View>
                    </View>
 
                    <View style={styles.guideFeatureRow}>
-                     <View style={[styles.dividerBadge, {backgroundColor: '#111'}]}><Ionicons name="remove" size={14} color="white"/></View>
+                     <View style={[styles.dividerBadge, {backgroundColor: colors.label.normal}]}><Ionicons name="remove" size={14} color={colors.background.normal}/></View>
                      <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Section Dividers</Text><Text style={styles.guideFeatureDesc}>Tap the minus icon on a Section Header to draw a thick separator line above it.</Text></View>
                    </View>
 
                    <View style={styles.guideFeatureRow}>
-                     <View style={styles.typeBadgeInstr}><Text style={{color:'white', fontSize: 10, fontWeight: 'bold'}}>INSTR</Text></View>
+                     <View style={styles.typeBadgeInstr}><Text style={{color: colors.background.normal, fontSize: 10, fontWeight: 'bold'}}>INSTR</Text></View>
                      <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Subheadings</Text><Text style={styles.guideFeatureDesc}>Change a question type to 'INSTR'. It removes the number and spans across all columns like a title.</Text></View>
                    </View>
                 </View>
@@ -1359,10 +1609,10 @@ export default function EditorScreen() {
               {/* TAB 3: TOOLS */}
               {guideTab === 'tools' && (
                 <View style={{gap: 20}}>
-                  <Text style={{fontSize: 14, color: '#6B7280', marginBottom: 4}}>Advanced editing tools.</Text>
+                  <Text style={{fontSize: 14, color: colors.label.alternative, marginBottom: 4}}>Advanced editing tools.</Text>
                   
                   <View style={styles.guideFeatureRow}>
-                    <View style={{backgroundColor: '#DBEAFE', padding: 6, borderRadius: 8}}><Ionicons name="refresh" size={16} color="#2563EB" /></View>
+                    <View style={{backgroundColor: colors.accent.blue.bgStrong, padding: 6, borderRadius: 8}}><Ionicons name="refresh" size={16} color={colors.primary.normal} /></View>
                     <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Rescan to Section</Text><Text style={styles.guideFeatureDesc}>Forgot a page? Tap this on a section to scan and automatically inject more questions directly into it.</Text></View>
                   </View>
 
@@ -1375,7 +1625,7 @@ export default function EditorScreen() {
                   </View>
 
                   <View style={styles.guideFeatureRow}>
-                    <View style={{backgroundColor: '#EFF6FF', padding: 6, borderRadius: 8}}><Ionicons name="swap-horizontal" size={16} color="#2563EB" /></View>
+                    <View style={{backgroundColor: colors.accent.blue.bg, padding: 6, borderRadius: 8}}><Ionicons name="swap-horizontal" size={16} color={colors.primary.normal} /></View>
                     <View style={{flex: 1}}><Text style={styles.guideFeatureTitle}>Moving Questions</Text><Text style={styles.guideFeatureDesc}>Use the arrows to reorder questions, or the blue swap icon to instantly move a question to another Section.</Text></View>
                   </View>
                 </View>
@@ -1387,156 +1637,182 @@ export default function EditorScreen() {
             <TouchableOpacity 
               onPress={() => setShowFormatGuide(false)} 
               style={{
-                backgroundColor: '#2563EB', 
+                backgroundColor: colors.primary.normal, 
                 width: '90%', 
                 alignSelf: 'center', 
-                paddingVertical: 16, 
-                borderRadius: 16, 
-                marginBottom: 20, 
+                paddingVertical: spacing.lg, 
+                borderRadius: radii.lg, 
+                marginBottom: spacing.xl, 
                 alignItems: 'center', 
                 justifyContent: 'center'
               }}
             >
-              <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>Got it</Text>
+              <Text style={{ ...typography.heading4, color: colors.background.normal }}>Got it</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
       <CustomAlert {...alertState} onClose={closeAlert} />
+
+      {/* SPOTLIGHT TOUR */}
+      <SpotlightTour
+        steps={EDITOR_TOUR_STEPS}
+        refs={getTourRefs()}
+        visible={showTour}
+        onFinish={handleTourFinish}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F3F4F6' },
-  nav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 12, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#e5e7eb' },
+  container: { flex: 1, backgroundColor: colors.background.alternative },
+  nav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 14, backgroundColor: colors.background.normal, borderBottomWidth: 1, borderColor: colors.line.normal },
   navBack: { padding: 8 },
   
-  toggleContainer: { flexDirection: 'row', backgroundColor: '#e5e7eb', borderRadius: 8, padding: 2 },
-  toggleBtn: { paddingVertical: 6, paddingHorizontal: 16, borderRadius: 6 },
-  toggleActive: { backgroundColor: 'white', shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
-  toggleText: { fontSize: 13, fontWeight: '600', color: '#6b7280' },
-  toggleTextActive: { color: '#111' },
+  toggleContainer: { flexDirection: 'row', backgroundColor: colors.fill.strong, borderRadius: radii.full, padding: 3 },
+  toggleBtn: { paddingVertical: 7, paddingHorizontal: 18, borderRadius: radii.full },
+  toggleActive: { backgroundColor: colors.background.normal, ...shadows.small },
+  toggleText: { fontSize: 13, fontWeight: '600', color: colors.label.alternative },
+  toggleTextActive: { color: colors.label.normal, fontWeight: '700' },
 
-  saveBtn: { padding: 8, backgroundColor: '#EFF6FF', borderRadius: 20 },
-  list: { padding: 16, paddingBottom: 100 },
-  headerCard: { backgroundColor: 'white', borderRadius: 16, padding: 20, marginBottom: 10 },
-  fontBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap:6, padding:10, backgroundColor: 'white', borderRadius: 12, marginBottom: 20 },
-  fontBtnText: { fontSize: 12, fontWeight: '700', color: '#555' },
+  saveBtn: { padding: 8, backgroundColor: colors.fill.normal, borderRadius: 20 },
+  list: { padding: spacing.lg, paddingBottom: 100 },
+  headerCard: { backgroundColor: colors.background.normal, borderRadius: radii.lg, padding: spacing.xl, marginBottom: spacing.md, ...shadows.small },
+  fontBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, backgroundColor: colors.background.normal, borderRadius: radii.md, marginBottom: spacing.xl, borderWidth: 1, borderColor: colors.line.normal },
+  fontBtnText: { fontSize: 12, fontWeight: '700', color: colors.label.alternative },
 
-  schoolInput: { fontSize: 18, fontWeight: '800', textAlign: 'center', marginBottom: 8, color: '#111' },
-  titleInput: { fontSize: 14, fontWeight: '600', textAlign: 'center', color: '#555', marginBottom: 6 },
-  classInput: { fontSize: 14, fontWeight: '600', textAlign: 'center', color: '#888', marginBottom: 20 },
-  metaRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  metaBox: { flex: 1, backgroundColor: '#f9fafb', padding: 10, borderRadius: 8 },
-  label: { fontSize: 10, fontWeight: '700', color: '#9ca3af', marginBottom: 4 },
-  metaInput: { fontSize: 14, fontWeight: '700', color: '#111' },
-  instructionBox: { backgroundColor: '#eff6ff', padding: 12, borderRadius: 8 },
-  instInput: { fontSize: 13, color: '#1e3a8a', lineHeight: 20, minHeight: 40 },
+  schoolInput: { fontSize: 18, fontWeight: '800', textAlign: 'center', marginBottom: 8, color: colors.label.normal },
+  titleInput: { fontSize: 14, fontWeight: '600', textAlign: 'center', color: colors.label.alternative, marginBottom: 6 },
+  classInput: { fontSize: 14, fontWeight: '600', textAlign: 'center', color: colors.label.assistive, marginBottom: spacing.xl },
+  metaRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.lg },
+  metaBox: { flex: 1, backgroundColor: colors.background.alternative, padding: spacing.md, borderRadius: radii.sm },
+  label: { fontSize: 10, fontWeight: '700', color: colors.label.assistive, marginBottom: 4 },
+  metaInput: { fontSize: 14, fontWeight: '700', color: colors.label.normal },
+  instructionBox: { backgroundColor: colors.accent.blue.bg, padding: spacing.md, borderRadius: radii.sm },
+  instInput: { fontSize: 13, color: colors.primary.heavy, lineHeight: 20, minHeight: 40 },
   
+  // SECTION NAVIGATOR
+  sectionNav: { backgroundColor: colors.background.normal, borderBottomWidth: 1, borderColor: colors.line.normal, maxHeight: 44 },
+  sectionNavContent: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm, alignItems: 'center' },
+  sectionNavChip: { height: 28, paddingHorizontal: 12, borderRadius: radii.full, borderWidth: 1, borderColor: colors.line.normal, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background.normal },
+  sectionNavChipActive: { backgroundColor: colors.primary.normal, borderColor: colors.primary.normal },
+  sectionNavChipText: { fontSize: 12, fontWeight: '600', color: colors.label.alternative },
+  sectionNavChipTextActive: { color: colors.static.white, fontWeight: '700' },
+
   // SECTIONS
-  sectionContainer: { marginBottom: 25 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingHorizontal: 4 },
-  sectionTitleInput: { fontSize: 16, fontWeight: '800', color: '#1f2937', flex: 1, borderBottomWidth: 1, borderColor: '#ddd', paddingBottom: 4 },
-  sectionTools: { flexDirection: 'row', gap: 8, marginLeft: 10 },
-  dividerBadge: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
-  dividerBadgeActive: { backgroundColor: '#111' },
-  layoutBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: '#e5e7eb' },
-  layoutBadgeActive: { backgroundColor: '#111' },
-  layoutText: { fontSize: 10, fontWeight: '700', color: '#555' },
+  sectionContainer: { marginBottom: spacing.xxl, borderLeftWidth: 3, borderLeftColor: colors.primary.normal, paddingLeft: spacing.md },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
+  sectionTitleInput: { ...typography.heading4, color: colors.label.normal, flex: 1, paddingBottom: 4 },
+  sectionTools: { flexDirection: 'row', gap: spacing.sm, marginLeft: spacing.md, alignItems: 'center' },
+  dividerBadge: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.fill.normal, justifyContent: 'center', alignItems: 'center' },
+  dividerBadgeActive: { backgroundColor: colors.label.normal },
+  layoutBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.md, backgroundColor: colors.fill.normal },
+  layoutBadgeActive: { backgroundColor: colors.label.normal },
+  layoutText: { fontSize: 10, fontWeight: '700', color: colors.label.alternative },
   delSectionBtn: { padding: 4 },
-  sectionFooter: { flexDirection: 'row', justifyContent: 'center', gap: 15, marginTop: 10 },
-  secActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: 8 },
-  secActionText: { fontSize: 12, color: '#2563EB', fontWeight: '600' },
+  sectionFooter: { flexDirection: 'row', justifyContent: 'center', gap: spacing.lg, marginTop: spacing.md },
+  secActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: spacing.sm },
+  secActionText: { fontSize: 12, color: colors.primary.normal, fontWeight: '600' },
+
+  // SOURCE IMAGE PREVIEW
+  sourceThumb: { width: 32, height: 32, borderRadius: radii.sm, overflow: 'hidden', borderWidth: 1, borderColor: colors.line.normal },
+  sourceThumbImg: { width: '100%', height: '100%' },
+  sourcePreviewOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
+  sourcePreviewContainer: { width: '92%', height: '80%', backgroundColor: colors.background.normal, borderRadius: radii.lg, overflow: 'hidden' },
+  sourcePreviewImage: { width: '100%', height: '100%' },
+  sourcePreviewClose: { position: 'absolute', top: 16, right: 16, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 20, padding: 8 },
 
   // QUESTIONS
-  qCard: { backgroundColor: 'white', borderRadius: 16, padding: 16, marginBottom: 16, shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 5, elevation: 1 },
-  qCardSelected: { backgroundColor: '#EFF6FF', borderWidth: 2, borderColor: '#2563EB' },
-  qHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  numTag: { backgroundColor: '#111', width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
-  numInput: { color: 'white', fontWeight: 'bold', fontSize: 14, textAlign: 'center', padding: 0, includeFontPadding: false },
+  qCard: { backgroundColor: colors.background.normal, borderRadius: radii.lg, padding: spacing.lg, marginBottom: spacing.lg, ...shadows.small },
+  qCardSelected: { backgroundColor: colors.accent.blue.bg, borderWidth: 2, borderColor: colors.primary.normal },
+  qHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.md },
+  numTag: { backgroundColor: colors.accent.blue.bg, width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  numInput: { color: colors.accent.blue.text, fontWeight: 'bold', fontSize: 14, textAlign: 'center', padding: 0, includeFontPadding: false },
   
-  typeBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: '#e5e7eb', marginLeft: 8 },
-  typeBadgeMCQ: { backgroundColor: '#8b5cf6' },
-  typeBadgeInstr: { backgroundColor: '#F59E0B' },
-  typeText: { fontSize: 10, fontWeight: '800', color: '#555' },
+  typeBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.md, backgroundColor: colors.fill.normal, marginLeft: 8 },
+  typeBadgeMCQ: { backgroundColor: colors.accent.purple.text },
+  typeBadgeInstr: { backgroundColor: colors.accent.orange.text },
+  typeText: { fontSize: 10, fontWeight: '800', color: colors.label.alternative },
 
   toolRow: { flexDirection: 'row', gap: 6 },
-  toolBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#f3f4f6', justifyContent: 'center', alignItems: 'center' },
+  toolBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: colors.fill.normal, justifyContent: 'center', alignItems: 'center' },
   
-  mcqContainer: { marginBottom: 12 },
+  mcqContainer: { marginBottom: spacing.md },
   mcqRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
-  mcqOption: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderRadius: 8, paddingHorizontal: 8, borderWidth: 1, borderColor: '#F3F4F6' },
-  mcqLabel: { fontWeight: '800', color: '#9CA3AF', marginRight: 6, fontSize: 12 },
-  mcqInput: { flex: 1, paddingVertical: 8, fontSize: 13, color: '#374151' },
+  mcqOption: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background.alternative, borderRadius: radii.sm, paddingHorizontal: 8, borderWidth: 1, borderColor: colors.line.alternative },
+  mcqLabel: { fontWeight: '800', color: colors.label.assistive, marginRight: 6, fontSize: 12 },
+  mcqInput: { flex: 1, paddingVertical: 8, fontSize: 13, color: colors.label.alternative },
   addOptionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4, padding: 4 },
-  addOptionText: { fontSize: 12, fontWeight: '600', color: '#2563EB' },
+  addOptionText: { fontSize: 12, fontWeight: '600', color: colors.primary.normal },
 
   // DIAGRAM CROP UI
-  addDiagramBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderStyle: 'dashed', borderRadius: 8, padding: 12, marginTop: 8, marginBottom: 8 },
-  addDiagramBtnHighlight: { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' },
-  addDiagramText: { fontSize: 12, fontWeight: '600', color: '#6B7280' },
-  addDiagramTextHighlight: { color: '#2563EB' },
+  addDiagramBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.background.alternative, borderWidth: 1, borderColor: colors.line.normal, borderStyle: 'dashed', borderRadius: radii.sm, padding: spacing.md, marginTop: 8, marginBottom: 8 },
+  addDiagramBtnHighlight: { backgroundColor: colors.accent.blue.bg, borderColor: colors.accent.blue.bgStrong },
+  addDiagramText: { fontSize: 12, fontWeight: '600', color: colors.label.alternative },
+  addDiagramTextHighlight: { color: colors.primary.normal },
 
-  diagramControl: { backgroundColor: '#f0fdf4', padding: 10, borderRadius: 8, marginBottom: 8, borderWidth: 1, borderColor: '#dcfce7' },
+  diagramControl: { backgroundColor: '#E8F5E9', padding: 10, borderRadius: radii.sm, marginBottom: 8, borderWidth: 1, borderColor: '#C8E6C9' },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  ctrlLabel: { fontSize: 12, fontWeight: '700', color: '#166534', marginBottom: 8 },
-  ctrlSub: { fontSize: 11, color: '#15803d' },
+  ctrlLabel: { fontSize: 12, fontWeight: '700', color: colors.status.positive, marginBottom: 8 },
+  ctrlSub: { fontSize: 11, color: colors.status.positive },
 
   // SIZE BADGES
-  sizeBadge: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#e5e7eb', justifyContent: 'center', alignItems: 'center' },
-  sizeBadgeActive: { backgroundColor: '#2563EB' },
-  sizeText: { fontSize: 10, fontWeight: '800', color: '#555' },
-  sizeTextActive: { color: 'white' },
+  sizeBadge: { width: 26, height: 26, borderRadius: 13, backgroundColor: colors.fill.normal, justifyContent: 'center', alignItems: 'center' },
+  sizeBadgeActive: { backgroundColor: colors.primary.normal },
+  sizeText: { fontSize: 10, fontWeight: '800', color: colors.label.alternative },
+  sizeTextActive: { color: colors.background.normal },
 
-  qInput: { fontSize: 16, lineHeight: 24, color: '#374151', minHeight: 40, textAlignVertical: 'top' },
+  qInput: { fontSize: 15, lineHeight: 22, color: colors.label.alternative, minHeight: 40, textAlignVertical: 'top' },
   dimmedInput: { opacity: 0.4, fontStyle: 'italic' },
-  instructionInput: { fontWeight: '700', fontSize: 15, color: '#111' },
-  qImage: { width: '100%', height: 180, backgroundColor: '#f9fafb', borderRadius: 8, marginTop: 12 },
-  qFooter: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderColor: '#f3f4f6' },
-  markLabel: { fontSize: 12, color: '#9ca3af', marginRight: 8 },
-  markInput: { backgroundColor: '#f3f4f6', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6, fontWeight: 'bold', minWidth: 40, textAlign: 'center', padding: 0, includeFontPadding: false },
+  instructionInput: { fontWeight: '700', fontSize: 15, color: colors.label.normal },
+  qImage: { width: '100%', height: 180, backgroundColor: colors.background.alternative, borderRadius: radii.sm, marginTop: spacing.md },
+  qFooter: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: spacing.lg, paddingTop: spacing.md, borderTopWidth: 1, borderColor: colors.line.alternative },
+  markLabel: { fontSize: 12, color: colors.label.assistive, marginRight: 8 },
+  markInput: { backgroundColor: colors.fill.normal, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6, fontWeight: 'bold', minWidth: 40, textAlign: 'center', padding: 0, includeFontPadding: false },
   
-  footerActions: { marginTop: 20, marginBottom: 40 },
-  addBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 16, borderStyle: 'dashed', borderWidth: 1, borderColor: '#9CA3AF', borderRadius: 12, backgroundColor: '#e5e7eb' },
-  addText: { color: '#374151', fontWeight: '700' },
+  footerActions: { marginTop: spacing.xl, marginBottom: spacing.jumbo },
+  addBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: spacing.lg, borderStyle: 'dashed', borderWidth: 1, borderColor: colors.label.assistive, borderRadius: radii.md, backgroundColor: colors.fill.alternative },
+  addText: { color: colors.label.alternative, fontWeight: '700' },
 
   // --- STICKY BOTTOM BAR ---
-  bottomBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: 'white', borderTopWidth: 1, borderColor: '#E5E7EB', paddingBottom: Platform.OS === 'ios' ? 24 : 12 },
-  bottomBarBtn: { alignItems: 'center', justifyContent: 'center', padding: 8, minWidth: 64 },
-  bottomBarText: { fontSize: 11, fontWeight: '600', color: '#4B5563', marginTop: 4 },
-  bottomBarBtnPrimary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#2563EB', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 24, flex: 1, marginHorizontal: 16, shadowColor: "#000", shadowOpacity: 0.1, shadowOffset: {width:0, height:2}, elevation: 2 },
-  bottomBarTextPrimary: { color: 'white', fontWeight: 'bold', fontSize: 14, marginLeft: 6 },
+  bottomBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg, paddingVertical: spacing.md, backgroundColor: colors.background.normal, borderTopWidth: 1, borderColor: colors.line.normal },
+  bottomBarBtn: { alignItems: 'center', justifyContent: 'center', padding: spacing.sm, width: 48 },
+  bottomBarText: { fontSize: 10, fontWeight: '600', color: colors.label.alternative, marginTop: 2 },
+  bottomBarBtnPrimary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary.normal, paddingVertical: 12, paddingHorizontal: spacing.xxl, borderRadius: radii.full, flex: 1, marginHorizontal: spacing.md, ...shadows.small },
+  bottomBarTextPrimary: { color: colors.background.normal, fontWeight: 'bold', fontSize: 14, marginLeft: 6 },
 
-  fabPreview: { position: 'absolute', bottom: 30, alignSelf: 'center', backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 16, borderRadius: 32, shadowColor: "#000", shadowOpacity: 0.2, shadowOffset: {width:0, height:4}, elevation: 5 },
-  fabText: { color: 'white', fontWeight: 'bold', marginLeft: 8, fontSize: 16 },
-  previewContainer: { flex: 1, backgroundColor: '#eee' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' },
-  menu: { width: 220, backgroundColor: 'white', borderRadius: 12, padding: 8, shadowColor: "#000", shadowOpacity: 0.1, elevation: 10 },
-  menuTitle: { fontSize: 11, fontWeight: '700', color: '#999', padding: 8, textTransform: 'uppercase' },
-  menuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 12, borderRadius: 8 },
-  menuText: { fontSize: 14, color: '#111' },
+  fabPreview: { position: 'absolute', bottom: 30, alignSelf: 'center', backgroundColor: colors.label.normal, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xxl, paddingVertical: spacing.lg, borderRadius: radii.full, ...shadows.large },
+  fabText: { color: colors.background.normal, fontWeight: 'bold', marginLeft: 8, fontSize: 16 },
+  previewContainer: { flex: 1, backgroundColor: colors.line.neutral },
+  previewLoading: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background.alternative },
+  previewLoadingText: { ...typography.body, color: colors.label.alternative, marginTop: spacing.md },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
+  menu: { width: 240, backgroundColor: colors.background.normal, borderRadius: radii.lg, padding: spacing.sm, ...shadows.medium },
+  menuTitle: { fontSize: 11, fontWeight: '700', color: colors.label.assistive, padding: spacing.sm, textTransform: 'uppercase' },
+  menuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md, borderRadius: radii.sm },
+  menuText: { fontSize: 14, color: colors.label.normal, fontWeight: '500' },
   
   // --- Dropdown Menu Styles ---
-  dropdownMenu: { backgroundColor: '#fff', borderRadius: 16, padding: 16, width: 280, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 10 },
-  dropdownTitle: { fontSize: 13, fontWeight: '700', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12, paddingHorizontal: 8 },
-  dropdownItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 12, borderRadius: 10, marginBottom: 4 },
-  dropdownItemActive: { backgroundColor: '#EFF6FF' },
-  dropdownItemText: { fontSize: 15, fontWeight: '500', color: '#374151' },
-  dropdownItemTextActive: { color: '#2563EB', fontWeight: '700' },
+  dropdownMenu: { backgroundColor: colors.background.normal, borderRadius: radii.xl, padding: spacing.lg, width: 280, ...shadows.large },
+  dropdownTitle: { fontSize: 13, fontWeight: '700', color: colors.label.assistive, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: spacing.md, paddingHorizontal: spacing.sm },
+  dropdownItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.md, paddingHorizontal: spacing.md, borderRadius: radii.sm, marginBottom: 4 },
+  dropdownItemActive: { backgroundColor: colors.accent.blue.bg },
+  dropdownItemText: { fontSize: 15, fontWeight: '500', color: colors.label.alternative },
+  dropdownItemTextActive: { color: colors.primary.normal, fontWeight: '700' },
   
   // Export Modal
-  exportModal: { width: '85%', backgroundColor: 'white', borderRadius: 20, padding: 24, alignItems: 'center' },
-  exportTitle: { fontSize: 20, fontWeight: '800', color: '#111', marginBottom: 8 },
-  exportSub: { fontSize: 14, color: '#6B7280', textAlign: 'center', marginBottom: 24 },
-  exportButtons: { flexDirection: 'row', gap: 16, marginBottom: 20 },
-  exportBtn: { flex: 1, alignItems: 'center', backgroundColor: '#F9FAFB', borderRadius: 16, padding: 20, borderWidth: 1, borderColor: '#E5E7EB' },
-  exportIconCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#EFF6FF', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
-  exportBtnText: { fontSize: 16, fontWeight: '700', color: '#111', marginBottom: 4 },
-  exportBtnSub: { fontSize: 12, color: '#6B7280' },
-  exportCancel: { paddingVertical: 12, paddingHorizontal: 24 },
-  exportCancelText: { fontSize: 16, fontWeight: '600', color: '#6B7280' },
+  exportModal: { width: '85%', backgroundColor: colors.background.normal, borderRadius: radii.xxl, padding: spacing.xxl, alignItems: 'center' },
+  exportTitle: { ...typography.heading2, color: colors.label.normal, marginBottom: spacing.sm },
+  exportSub: { fontSize: 14, color: colors.label.alternative, textAlign: 'center', marginBottom: spacing.xxl },
+  exportButtons: { flexDirection: 'row', gap: spacing.lg, marginBottom: spacing.xl },
+  exportBtn: { flex: 1, alignItems: 'center', backgroundColor: colors.background.alternative, borderRadius: radii.lg, padding: spacing.xl, borderWidth: 1, borderColor: colors.line.normal },
+  exportIconCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.accent.blue.bg, justifyContent: 'center', alignItems: 'center', marginBottom: spacing.md },
+  exportBtnText: { ...typography.heading4, color: colors.label.normal, marginBottom: 4 },
+  exportBtnSub: { fontSize: 12, color: colors.label.alternative },
+  exportCancel: { paddingVertical: spacing.md, paddingHorizontal: spacing.xxl },
+  exportCancelText: { fontSize: 16, fontWeight: '600', color: colors.label.alternative },
 
   // --- Scan Progress Overlay ---
   loadingOverlay: {
@@ -1545,22 +1821,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center', zIndex: 999,
   },
   loadingBox: {
-    backgroundColor: '#fff', borderRadius: 20, padding: 28,
-    width: 300,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25, shadowRadius: 16, elevation: 12,
+    backgroundColor: colors.background.normal, borderRadius: radii.xxl, padding: 28,
+    width: 300, ...shadows.large,
   },
   loadingHeader: {
     flexDirection: 'row', alignItems: 'center', marginBottom: 24,
   },
   loadingIconRing: {
     width: 32, height: 32, borderRadius: 16,
-    backgroundColor: '#2563EB',
+    backgroundColor: colors.primary.normal,
     justifyContent: 'center', alignItems: 'center',
     marginRight: 10,
   },
   loadingTitle: {
-    fontSize: 17, fontWeight: '800', color: '#111',
+    fontSize: 17, fontWeight: '800', color: colors.label.normal,
   },
   stepRow: {
     flexDirection: 'row', alignItems: 'center',
@@ -1568,58 +1842,58 @@ const styles = StyleSheet.create({
   },
   stepDot: {
     width: 28, height: 28, borderRadius: 14,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: colors.line.normal,
     justifyContent: 'center', alignItems: 'center',
     marginRight: 12, zIndex: 1,
   },
   stepDotActive: {
-    backgroundColor: '#2563EB',
+    backgroundColor: colors.primary.normal,
   },
   stepDotDone: {
-    backgroundColor: '#16A34A',
+    backgroundColor: colors.status.positive,
   },
   stepDotText: {
-    fontSize: 11, fontWeight: '700', color: '#9CA3AF',
+    fontSize: 11, fontWeight: '700', color: colors.label.assistive,
   },
   stepLabel: {
-    fontSize: 14, fontWeight: '500', color: '#9CA3AF', flex: 1,
+    fontSize: 14, fontWeight: '500', color: colors.label.assistive, flex: 1,
   },
   stepLabelActive: {
-    color: '#2563EB', fontWeight: '700',
+    color: colors.primary.normal, fontWeight: '700',
   },
   stepLabelDone: {
-    color: '#16A34A', fontWeight: '600',
+    color: colors.status.positive, fontWeight: '600',
   },
   stepConnector: {
     position: 'absolute', left: 13, top: 28,
-    width: 2, height: 14, backgroundColor: '#E5E7EB', zIndex: 0,
+    width: 2, height: 14, backgroundColor: colors.line.normal, zIndex: 0,
   },
   stepConnectorDone: {
-    backgroundColor: '#16A34A',
+    backgroundColor: colors.status.positive,
   },
   loadingStatusText: {
-    marginTop: 12, fontSize: 12, color: '#6B7280',
+    marginTop: 12, fontSize: 12, color: colors.label.alternative,
     fontWeight: '500', textAlign: 'center',
   },
 
   // --- Bulk Action Bar Styles ---
-  bulkActionBar: { position: 'absolute', bottom: 30, alignSelf: 'center', backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 14, borderRadius: 32, width: '80%', shadowColor: "#000", shadowOpacity: 0.3, shadowOffset: {width:0, height:6}, elevation: 8 },
-  bulkActionText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-  bulkActionBtn: { backgroundColor: '#2563EB', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
-  bulkActionBtnText: { color: 'white', fontWeight: '700', fontSize: 13 },
+  bulkActionBar: { position: 'absolute', bottom: 30, alignSelf: 'center', backgroundColor: colors.label.normal, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, paddingVertical: 14, borderRadius: radii.full, width: '80%', ...shadows.large },
+  bulkActionText: { color: colors.background.normal, fontWeight: 'bold', fontSize: 16 },
+  bulkActionBtn: { backgroundColor: colors.primary.normal, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radii.full },
+  bulkActionBtnText: { color: colors.background.normal, fontWeight: '700', fontSize: 13 },
 
   // --- Quick Format Toolbar ---
-  formatToolbar: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 4, paddingHorizontal: 2 },
-  formatBtn: { backgroundColor: '#F9FAFB', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 6, borderWidth: 1, borderColor: '#E5E7EB' },
-  formatBtnText: { color: '#4B5563', fontSize: 13, fontWeight: '700' },
+  formatToolbar: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm, marginBottom: 4, paddingHorizontal: 2 },
+  formatBtn: { backgroundColor: colors.fill.normal, paddingVertical: 6, paddingHorizontal: 14, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.line.alternative },
+  formatBtnText: { color: colors.label.alternative, fontSize: 13, fontWeight: '700' },
 
   // --- Format Guide Styles ---
-  guideRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F9FAFB', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' },
-  guideCode: { backgroundColor: '#E5E7EB', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, minWidth: 80, alignItems: 'center' },
-  guideCodeText: { fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', fontSize: 13, color: '#4B5563', fontWeight: '700' },
+  guideRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.background.alternative, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radii.md, borderWidth: 1, borderColor: colors.line.normal },
+  guideCode: { backgroundColor: colors.fill.strong, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, minWidth: 80, alignItems: 'center' },
+  guideCodeText: { fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', fontSize: 13, color: colors.label.alternative, fontWeight: '700' },
 
   // --- Editor Guide Styles ---
   guideFeatureRow: { flexDirection: 'row', gap: 14, alignItems: 'flex-start' },
-  guideFeatureTitle: { fontSize: 15, fontWeight: '800', color: '#111', marginBottom: 4 },
-  guideFeatureDesc: { fontSize: 13, color: '#6B7280', lineHeight: 20 },
+  guideFeatureTitle: { ...typography.body, fontWeight: '800', color: colors.label.normal, marginBottom: 4 },
+  guideFeatureDesc: { ...typography.bodySmall, color: colors.label.alternative, lineHeight: 20 },
 });

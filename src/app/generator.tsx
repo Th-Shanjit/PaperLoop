@@ -1,20 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert, Dimensions, TextInput, KeyboardAvoidingView, Platform, Modal } from 'react-native';
+import { 
+  View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, 
+  Dimensions, TextInput, KeyboardAvoidingView, Platform, Modal, StyleSheet
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Camera, Send, ChevronLeft, Sparkles, X, Trash2, PlusCircle, Layout } from 'lucide-react-native';
-import tw from 'twrnc';
 import { transcribeHandwriting } from '../core/services/gemini';
 import { generateExamPDF, TemplateType } from '../core/services/pdf';
 import { saveExam } from '../core/services/storage';
+import { usePostHog } from 'posthog-react-native';
+import CustomAlert from '../components/CustomAlert';
+import { useCustomAlert } from '../hooks/useCustomAlert';
+import { colors, typography, spacing, radii, shadows } from '../core/theme';
 
 const { width } = Dimensions.get('window');
 const IMAGE_SIZE = (width - 48) / 2;
 
 export default function GeneratorScreen() {
   const router = useRouter();
+  const posthog = usePostHog();
+  const { alertState, showAlert, closeAlert } = useCustomAlert();
   
-  // --- STATE ---
   const [images, setImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
@@ -22,7 +28,6 @@ export default function GeneratorScreen() {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [isMathMode, setIsMathMode] = useState(false);
 
-  // --- PDF SETTINGS STATE (These were missing!) ---
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateType>('simple');
   const [pdfHeader, setPdfHeader] = useState({
@@ -33,19 +38,13 @@ export default function GeneratorScreen() {
     instructions: "All questions are compulsory."
   });
 
-  // 1. LOAD IMAGES AND MATH MODE
   useEffect(() => {
     const incoming = (global as any).scannedImages;
     const mathMode = (global as any).isMathMode;
-    if (incoming && incoming.length > 0) {
-      setImages(incoming);
-    }
-    if (mathMode !== undefined) {
-      setIsMathMode(mathMode);
-    }
+    if (incoming && incoming.length > 0) setImages(incoming);
+    if (mathMode !== undefined) setIsMathMode(mathMode);
   }, []);
 
-  // 2. SWAP LOGIC
   const handleImageTap = (index: number) => {
     if (selectedIdx === null) {
       setSelectedIdx(index);
@@ -70,54 +69,49 @@ export default function GeneratorScreen() {
     }
   };
 
-  // 3. TRANSCRIBE
   const handleTranscribe = async () => {
     if (images.length === 0) return;
     setLoading(true);
     setResult(null);
     setStatus("Preparing images...");
     try {
-      setStatus(isMathMode ? "📐 Math/Science Mode: Tracing structures..." : "📝 Standard Mode: Reading handwriting...");
-      // #region agent log
-      const mappedImages = images.map(uri => ({ uri }));
-      fetch('http://127.0.0.1:7459/ingest/96cc0c91-64f8-4192-b458-5e6913215ddd',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'88dc6d'},body:JSON.stringify({sessionId:'88dc6d',location:'generator.tsx:handleTranscribe',message:'images mapped for transcription',data:{imageCount:mappedImages.length,firstUri:mappedImages[0]?.uri?.substring?.(0,80),firstUriType:typeof mappedImages[0]?.uri},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
+      setStatus(isMathMode ? "Math/Science Mode: Tracing structures..." : "Standard Mode: Reading handwriting...");
+      const startTime = Date.now();
       const data = await transcribeHandwriting(
-        mappedImages,
+        images.map(uri => ({ uri })),
         (msg) => setStatus(msg)
       );
+      posthog?.capture('ai_scan_success', {
+        duration_seconds: (Date.now() - startTime) / 1000,
+      });
       setStatus("Finalizing...");
       setResult(data);
     } catch (err: any) {
-      Alert.alert("Error", err.message);
+      posthog?.capture('ai_scan_failed', { error_message: err?.message ?? String(err) });
+      showAlert("Error", err.message);
     } finally {
       setLoading(false);
       setStatus("");
     }
   };
 
-  // 4. OPEN PDF SETTINGS
   const handleOpenPDFSetup = () => {
     if (!result?.questions) return;
     setShowPdfModal(true);
   };
 
-  // 5. GENERATE FINAL PDF (FIXED: Uses state correctly)
   const handleGenerateFinalPDF = async () => {
     setShowPdfModal(false);
-    // Pass the full header object and template choice, NOT just a string
     await generateExamPDF(pdfHeader, result.questions, selectedTemplate);
   };
 
-  // 6. SAVE EXAM
   const handleSave = async () => {
     if (!result?.questions) return;
     const defaultName = `Exam ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     const success = await saveExam(defaultName, result.questions);
-    if (success) Alert.alert("Success", "Exam saved to History!");
+    if (success) showAlert("Success", "Exam saved to History!");
   };
 
-  // --- EDITOR UPDATES ---
   const updateQuestionText = (text: string, index: number) => {
     const updatedQuestions = [...result.questions];
     updatedQuestions[index].text = text;
@@ -125,11 +119,11 @@ export default function GeneratorScreen() {
   };
   const updateQuestionMarks = (marks: string, index: number) => {
     const updatedQuestions = [...result.questions];
-    updatedQuestions[index].marks = marks; 
+    updatedQuestions[index].marks = marks;
     setResult({ ...result, questions: updatedQuestions });
   };
   const deleteQuestion = (index: number) => {
-    Alert.alert("Delete Question", "Are you sure?", [
+    showAlert("Delete Question", "Are you sure?", [
       { text: "Cancel", style: "cancel" },
       { text: "Delete", style: "destructive", onPress: () => {
           const updatedQuestions = result.questions.filter((_: any, i: number) => i !== index);
@@ -142,138 +136,352 @@ export default function GeneratorScreen() {
     setResult({ ...result, questions: [...result.questions, newQ] });
   };
 
-  // --- RENDER HELPERS ---
-  const TemplateOption = ({ type, label, icon }: { type: TemplateType, label: string, icon: any }) => (
+  const TemplateOption = ({ type, label, icon }: { type: TemplateType, label: string, icon: React.ReactNode }) => (
     <TouchableOpacity 
       onPress={() => setSelectedTemplate(type)}
       style={[
-        tw`flex-1 items-center p-3 rounded-xl border-2 mr-2`,
-        selectedTemplate === type ? tw`border-blue-500 bg-blue-50` : tw`border-gray-200 bg-white`
+        styles.templateOption,
+        selectedTemplate === type ? styles.templateOptionActive : styles.templateOptionInactive
       ]}
     >
-      <View style={tw`mb-2`}>{icon}</View>
-      <Text style={[tw`text-xs font-bold`, selectedTemplate === type ? tw`text-blue-600` : tw`text-gray-500`]}>
+      <View style={styles.templateIconBox}>{icon}</View>
+      <Text style={[
+        styles.templateLabel,
+        selectedTemplate === type ? styles.templateLabelActive : {}
+      ]}>
         {label}
       </Text>
     </TouchableOpacity>
   );
 
-  // --- VIEWS ---
+  // --- LOADING VIEW ---
   if (loading) return (
-    <View style={tw`flex-1 bg-white justify-center items-center px-8`}>
-      <ActivityIndicator size="large" color="#2563EB" />
-      <Text style={tw`mt-6 text-xl font-bold text-gray-800`}>Generating Exam</Text>
-      <Text style={tw`mt-2 text-gray-500`}>{status}</Text>
+    <View style={styles.loadingContainer}>
+      <ActivityIndicator size="large" color={colors.primary.normal} />
+      <Text style={styles.loadingTitle}>Generating Exam</Text>
+      <Text style={styles.loadingStatus}>{status}</Text>
+      <CustomAlert {...alertState} onClose={closeAlert} />
     </View>
   );
 
+  // --- RESULT / EDITOR VIEW ---
   if (result) return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={tw`flex-1 bg-white`}>
-      <View style={tw`bg-white px-6 pt-12 pb-4 border-b border-gray-100 flex-row justify-between items-center`}>
-        <TouchableOpacity onPress={() => setResult(null)} style={tw`p-2`}><ChevronLeft size={24} color="#333" /></TouchableOpacity>
-        <View><Text style={tw`text-lg font-bold text-center`}>Edit Exam</Text><Text style={tw`text-xs text-gray-400 text-center`}>{result.questions.length} Questions</Text></View>
-        <View style={tw`flex-row gap-2`}>
-          <TouchableOpacity onPress={handleSave} style={tw`bg-gray-100 px-4 py-2 rounded-lg`}><Text style={tw`font-bold text-gray-900`}>Save</Text></TouchableOpacity>
-          <TouchableOpacity onPress={handleOpenPDFSetup} style={tw`p-2 bg-blue-50 rounded-lg`}><Layout size={20} color="#2563EB" /></TouchableOpacity>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
+      <View style={styles.resultHeader}>
+        <TouchableOpacity onPress={() => setResult(null)} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={24} color={colors.label.normal} />
+        </TouchableOpacity>
+        <View style={styles.resultHeaderCenter}>
+          <Text style={styles.resultHeaderTitle}>Edit Exam</Text>
+          <Text style={styles.resultHeaderSub}>{result.questions.length} Questions</Text>
+        </View>
+        <View style={styles.resultHeaderActions}>
+          <TouchableOpacity onPress={handleSave} style={styles.saveBtn}>
+            <Text style={styles.saveBtnText}>Save</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleOpenPDFSetup} style={styles.pdfBtn}>
+            <Ionicons name="grid-outline" size={20} color={colors.primary.normal} />
+          </TouchableOpacity>
         </View>
       </View>
 
-      <ScrollView style={tw`flex-1 px-4 pt-4`}>
+      <ScrollView style={styles.resultScroll} contentContainerStyle={styles.resultScrollContent}>
         {result.questions?.map((q: any, i: number) => (
-          <View key={i} style={tw`bg-white border border-gray-200 p-4 rounded-xl mb-3 shadow-sm`}>
-            <View style={tw`flex-row justify-between items-center mb-2`}>
-              <Text style={tw`font-bold text-blue-600`}>Q{i + 1}</Text>
-              <View style={tw`flex-row items-center gap-2`}>
-                <View style={tw`flex-row items-center bg-gray-50 px-2 py-1 rounded border border-gray-200`}><TextInput value={String(q.marks)} onChangeText={(val) => updateQuestionMarks(val, i)} keyboardType="numeric" style={tw`font-bold text-gray-700 text-xs w-6 text-center`} /><Text style={tw`text-xs text-gray-400 ml-1`}>Marks</Text></View>
-                <TouchableOpacity onPress={() => deleteQuestion(i)} style={tw`p-1`}><Trash2 size={18} color="#EF4444" /></TouchableOpacity>
+          <View key={i} style={styles.questionCard}>
+            <View style={styles.questionHeader}>
+              <Text style={styles.questionNumber}>Q{i + 1}</Text>
+              <View style={styles.questionActions}>
+                <View style={styles.marksBox}>
+                  <TextInput 
+                    value={String(q.marks)} 
+                    onChangeText={(val) => updateQuestionMarks(val, i)} 
+                    keyboardType="numeric" 
+                    style={styles.marksInput} 
+                  />
+                  <Text style={styles.marksLabel}>Marks</Text>
+                </View>
+                <TouchableOpacity onPress={() => deleteQuestion(i)} style={styles.deleteBtn}>
+                  <Ionicons name="trash-outline" size={18} color={colors.status.negative} />
+                </TouchableOpacity>
               </View>
             </View>
-            <TextInput value={q.text} onChangeText={(val) => updateQuestionText(val, i)} multiline style={tw`text-gray-800 leading-6 text-base pt-0`} />
+            <TextInput 
+              value={q.text} 
+              onChangeText={(val) => updateQuestionText(val, i)} 
+              multiline 
+              style={styles.questionInput} 
+            />
           </View>
         ))}
-        <TouchableOpacity onPress={addQuestion} style={tw`flex-row justify-center items-center py-6 border-2 border-dashed border-gray-300 rounded-xl mb-24 bg-gray-50`}><PlusCircle size={24} color="#9CA3AF" /><Text style={tw`text-gray-400 font-bold ml-2`}>Add Question</Text></TouchableOpacity>
+        <TouchableOpacity onPress={addQuestion} style={styles.addQuestionBtn}>
+          <Ionicons name="add-circle-outline" size={24} color={colors.label.assistive} />
+          <Text style={styles.addQuestionText}>Add Question</Text>
+        </TouchableOpacity>
       </ScrollView>
 
       {/* FLOATING ACTION BUTTON */}
-      <View style={tw`absolute bottom-8 left-6 right-6`}>
-        <TouchableOpacity onPress={handleOpenPDFSetup} style={tw`bg-blue-600 h-14 rounded-full flex-row justify-center items-center shadow-lg`}>
-          <Text style={tw`text-white font-bold text-lg mr-2`}>Finalize PDF</Text>
-          <Layout size={20} color="white" />
+      <View style={styles.fabContainer}>
+        <TouchableOpacity onPress={handleOpenPDFSetup} style={styles.fab}>
+          <Text style={styles.fabText}>Finalize PDF</Text>
+          <Ionicons name="grid-outline" size={20} color={colors.background.normal} />
         </TouchableOpacity>
       </View>
 
-      {/* --- PDF SETTINGS MODAL --- */}
-      <Modal visible={showPdfModal} animationType="slide" transparent={true}>
-        <View style={tw`flex-1 justify-end bg-black bg-opacity-50`}>
-          <View style={tw`bg-white rounded-t-3xl p-6 h-[85%]`}>
-            <View style={tw`flex-row justify-between items-center mb-6`}>
-              <Text style={tw`text-xl font-bold`}>Paper Settings</Text>
-              <TouchableOpacity onPress={() => setShowPdfModal(false)}><X size={24} color="#333" /></TouchableOpacity>
+      {/* PDF SETTINGS MODAL */}
+      <Modal visible={showPdfModal} animationType="slide" transparent>
+        <View style={styles.pdfModalOverlay}>
+          <View style={styles.pdfModalSheet}>
+            <View style={styles.pdfModalHeader}>
+              <Text style={styles.pdfModalTitle}>Paper Settings</Text>
+              <TouchableOpacity onPress={() => setShowPdfModal(false)}>
+                <Ionicons name="close" size={24} color={colors.label.normal} />
+              </TouchableOpacity>
             </View>
             
-            <ScrollView>
-              {/* Template Selector */}
-              <Text style={tw`text-gray-500 mb-3 ml-1 font-bold`}>SELECT TEMPLATE</Text>
-              <View style={tw`flex-row mb-6`}>
-                <TemplateOption type="simple" label="Simple" icon={<View style={tw`w-8 h-10 border border-gray-400 bg-gray-100 rounded-sm`} />} />
-                <TemplateOption type="unit_test" label="Unit Test" icon={<View style={tw`w-8 h-10 border border-gray-800 bg-white rounded-sm items-center justify-center`}><View style={tw`w-6 h-6 border border-gray-300`} /></View>} />
-                <TemplateOption type="final_exam" label="Final Exam" icon={<View style={tw`w-8 h-10 border-2 border-double border-black bg-white rounded-sm`} />} />
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.fieldLabel}>SELECT TEMPLATE</Text>
+              <View style={styles.templateRow}>
+                <TemplateOption 
+                  type="simple" 
+                  label="Simple" 
+                  icon={<View style={styles.tplIconSimple} />} 
+                />
+                <TemplateOption 
+                  type="unit_test" 
+                  label="Unit Test" 
+                  icon={<View style={styles.tplIconUnit}><View style={styles.tplIconUnitInner} /></View>} 
+                />
+                <TemplateOption 
+                  type="final_exam" 
+                  label="Final Exam" 
+                  icon={<View style={styles.tplIconFinal} />} 
+                />
               </View>
 
-              <Text style={tw`text-gray-500 mb-1 ml-1`}>School Name</Text>
-              <TextInput style={tw`bg-gray-100 p-4 rounded-xl mb-4 text-base`} value={pdfHeader.schoolName} onChangeText={t => setPdfHeader({...pdfHeader, schoolName: t})} />
+              <Text style={styles.fieldLabel}>School Name</Text>
+              <TextInput style={styles.fieldInput} value={pdfHeader.schoolName} onChangeText={t => setPdfHeader({...pdfHeader, schoolName: t})} />
               
-              <Text style={tw`text-gray-500 mb-1 ml-1`}>Exam Title (e.g. Final Term)</Text>
-              <TextInput style={tw`bg-gray-100 p-4 rounded-xl mb-4 text-base`} value={pdfHeader.examTitle} onChangeText={t => setPdfHeader({...pdfHeader, examTitle: t})} />
+              <Text style={styles.fieldLabel}>Exam Title (e.g. Final Term)</Text>
+              <TextInput style={styles.fieldInput} value={pdfHeader.examTitle} onChangeText={t => setPdfHeader({...pdfHeader, examTitle: t})} />
               
-              <View style={tw`flex-row gap-4`}>
-                <View style={tw`flex-1`}><Text style={tw`text-gray-500 mb-1 ml-1`}>Time</Text><TextInput style={tw`bg-gray-100 p-4 rounded-xl mb-4 text-base`} value={pdfHeader.duration} onChangeText={t => setPdfHeader({...pdfHeader, duration: t})} /></View>
-                <View style={tw`flex-1`}><Text style={tw`text-gray-500 mb-1 ml-1`}>Marks</Text><TextInput style={tw`bg-gray-100 p-4 rounded-xl mb-4 text-base`} value={pdfHeader.totalMarks} onChangeText={t => setPdfHeader({...pdfHeader, totalMarks: t})} /></View>
+              <View style={styles.fieldRow}>
+                <View style={styles.fieldHalf}>
+                  <Text style={styles.fieldLabel}>Time</Text>
+                  <TextInput style={styles.fieldInput} value={pdfHeader.duration} onChangeText={t => setPdfHeader({...pdfHeader, duration: t})} />
+                </View>
+                <View style={styles.fieldHalf}>
+                  <Text style={styles.fieldLabel}>Marks</Text>
+                  <TextInput style={styles.fieldInput} value={pdfHeader.totalMarks} onChangeText={t => setPdfHeader({...pdfHeader, totalMarks: t})} />
+                </View>
               </View>
 
-              <Text style={tw`text-gray-500 mb-1 ml-1`}>Instructions</Text>
-              <TextInput style={tw`bg-gray-100 p-4 rounded-xl mb-8 text-base h-24`} multiline textAlignVertical="top" value={pdfHeader.instructions} onChangeText={t => setPdfHeader({...pdfHeader, instructions: t})} />
+              <Text style={styles.fieldLabel}>Instructions</Text>
+              <TextInput 
+                style={[styles.fieldInput, styles.fieldInputTall]} 
+                multiline 
+                textAlignVertical="top" 
+                value={pdfHeader.instructions} 
+                onChangeText={t => setPdfHeader({...pdfHeader, instructions: t})} 
+              />
 
-              <TouchableOpacity onPress={handleGenerateFinalPDF} style={tw`bg-black h-14 rounded-full flex-row justify-center items-center shadow-lg mb-8`}>
-                 <Text style={tw`text-white font-bold text-lg`}>Print / Share PDF</Text>
+              <TouchableOpacity onPress={handleGenerateFinalPDF} style={styles.generateBtn}>
+                <Text style={styles.generateBtnText}>Print / Share PDF</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
         </View>
       </Modal>
+
+      <CustomAlert {...alertState} onClose={closeAlert} />
     </KeyboardAvoidingView>
   );
 
-  // --- STAGING VIEW (Unchanged) ---
+  // --- STAGING VIEW ---
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={tw`flex-1 bg-gray-50`}>
-      <View style={tw`bg-white pt-12 pb-4 px-6 border-b border-gray-200`}><Text style={tw`text-2xl font-bold text-gray-900`}>New Test</Text><Text style={tw`text-gray-500`}>Review scans.</Text></View>
-      <ScrollView contentContainerStyle={tw`p-6 flex-grow`}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.containerAlt}>
+      <View style={styles.stagingHeader}>
+        <Text style={styles.stagingTitle}>New Test</Text>
+        <Text style={styles.stagingSub}>Review scans.</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.stagingScroll}>
         {images.length === 0 ? (
-          <View style={tw`items-center py-20`}><View style={tw`bg-gray-200 p-6 rounded-full mb-4`}><Camera size={40} color="#9CA3AF" /></View><Text style={tw`text-gray-400 text-center`}>No scans yet.{'\n'}Tap camera to start.</Text></View>
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIcon}>
+              <Ionicons name="camera-outline" size={40} color={colors.label.assistive} />
+            </View>
+            <Text style={styles.emptyText}>No scans yet.{'\n'}Tap camera to start.</Text>
+          </View>
         ) : (
-          <View style={tw`flex-row flex-wrap justify-between`}>
+          <View style={styles.imageGrid}>
             {images.map((uri, index) => {
               const isSelected = selectedIdx === index;
               return (
-                <TouchableOpacity key={index} onPress={() => handleImageTap(index)} activeOpacity={0.8} style={[tw`mb-4 rounded-xl overflow-hidden bg-white border-2 shadow-sm`, { width: IMAGE_SIZE, height: IMAGE_SIZE * 1.3, borderColor: isSelected ? '#2563EB' : 'transparent', transform: [{ scale: isSelected ? 0.95 : 1 }] }]}> 
-                  <Image source={{ uri }} style={tw`flex-1`} resizeMode="cover" />
-                  <View style={tw`bg-gray-100 py-2 border-t border-gray-200 items-center`}><Text style={tw`font-bold text-gray-700 text-xs`}>Page {index + 1}</Text></View>
-                  {isSelected && (<View style={tw`absolute inset-0 bg-blue-500 bg-opacity-20 justify-center items-center`}><Text style={tw`text-white font-bold mt-2 shadow-lg`}>Tap to Swap</Text><TouchableOpacity onPress={handleRemoveImage} style={tw`absolute top-2 right-2 bg-red-500 p-2 rounded-full`}><X size={16} color="white" /></TouchableOpacity></View>)}
+                <TouchableOpacity 
+                  key={index} 
+                  onPress={() => handleImageTap(index)} 
+                  activeOpacity={0.8} 
+                  style={[
+                    styles.imageCard,
+                    { width: IMAGE_SIZE, height: IMAGE_SIZE * 1.3 },
+                    isSelected && styles.imageCardSelected
+                  ]}
+                > 
+                  <Image source={{ uri }} style={styles.imageThumbnail} resizeMode="cover" />
+                  <View style={styles.imageLabel}>
+                    <Text style={styles.imageLabelText}>Page {index + 1}</Text>
+                  </View>
+                  {isSelected && (
+                    <View style={styles.imageOverlay}>
+                      <Text style={styles.imageOverlayText}>Tap to Swap</Text>
+                      <TouchableOpacity onPress={handleRemoveImage} style={styles.imageRemoveBtn}>
+                        <Ionicons name="close" size={16} color={colors.background.normal} />
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </TouchableOpacity>
               );
             })}
-            <TouchableOpacity onPress={() => router.push('/camera')} style={[tw`mb-4 rounded-xl border-2 border-dashed border-gray-300 justify-center items-center bg-gray-50`, { width: IMAGE_SIZE, height: IMAGE_SIZE * 1.3 }]}><PlusCircle size={32} color="#9CA3AF" /><Text style={tw`text-gray-400 font-bold mt-2`}>Add Page</Text></TouchableOpacity>
+            <TouchableOpacity 
+              onPress={() => router.push('/camera')} 
+              style={[styles.addPageCard, { width: IMAGE_SIZE, height: IMAGE_SIZE * 1.3 }]}
+            >
+              <Ionicons name="add-circle-outline" size={32} color={colors.label.assistive} />
+              <Text style={styles.addPageText}>Add Page</Text>
+            </TouchableOpacity>
           </View>
         )}
       </ScrollView>
-      <View style={tw`bg-white border-t border-gray-200 px-4 py-4`}>
+
+      <View style={styles.bottomBar}>
         {images.length > 0 ? (
-          <TouchableOpacity onPress={handleTranscribe} style={tw`bg-black h-14 rounded-2xl flex-row justify-center items-center shadow-lg`}><Sparkles size={20} color="#FFD700" style={tw`mr-2`} /><Text style={tw`text-white font-bold text-lg`}>Transcribe</Text></TouchableOpacity>
+          <TouchableOpacity onPress={handleTranscribe} style={styles.transcribeBtn}>
+            <Ionicons name="sparkles" size={20} color="#FFD700" />
+            <Text style={styles.transcribeBtnText}>Transcribe</Text>
+          </TouchableOpacity>
         ) : (
-          <View style={tw`flex-row items-center gap-2`}><View style={tw`flex-1 bg-gray-100 rounded-full px-4 py-3`}><TextInput style={tw`text-base text-gray-900`} placeholder="Type topic..." placeholderTextColor="#9CA3AF" /></View><TouchableOpacity style={tw`bg-gray-200 rounded-full p-3`}><Send size={20} color="#374151" /></TouchableOpacity><TouchableOpacity style={tw`bg-blue-500 rounded-full p-4 shadow-lg`} onPress={() => router.push('/camera')}><Camera size={24} color="#FFFFFF" /></TouchableOpacity></View>
+          <View style={styles.bottomBarEmpty}>
+            <View style={styles.topicInput}>
+              <TextInput style={styles.topicInputField} placeholder="Type topic..." placeholderTextColor={colors.label.assistive} />
+            </View>
+            <TouchableOpacity style={styles.sendBtn}>
+              <Ionicons name="send" size={20} color={colors.label.alternative} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cameraBtn} onPress={() => router.push('/camera')}>
+              <Ionicons name="camera" size={24} color={colors.background.normal} />
+            </TouchableOpacity>
+          </View>
         )}
       </View>
+
+      <CustomAlert {...alertState} onClose={closeAlert} />
     </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  // Shared
+  container: { flex: 1, backgroundColor: colors.background.normal },
+  containerAlt: { flex: 1, backgroundColor: colors.background.alternative },
+
+  // Loading
+  loadingContainer: { flex: 1, backgroundColor: colors.background.normal, justifyContent: 'center', alignItems: 'center', paddingHorizontal: spacing.xxxl },
+  loadingTitle: { ...typography.heading2, color: colors.label.normal, marginTop: spacing.xxl },
+  loadingStatus: { ...typography.body, color: colors.label.alternative, marginTop: spacing.sm },
+
+  // Result header
+  resultHeader: { backgroundColor: colors.background.normal, paddingTop: 48, paddingBottom: spacing.lg, paddingHorizontal: spacing.xl, borderBottomWidth: 1, borderColor: colors.line.normal, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  backBtn: { padding: spacing.sm },
+  resultHeaderCenter: { alignItems: 'center' },
+  resultHeaderTitle: { ...typography.heading3, color: colors.label.normal },
+  resultHeaderSub: { ...typography.caption, color: colors.label.assistive, marginTop: 2 },
+  resultHeaderActions: { flexDirection: 'row', gap: spacing.sm },
+  saveBtn: { backgroundColor: colors.fill.normal, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radii.sm },
+  saveBtnText: { ...typography.buttonSmall, color: colors.label.normal },
+  pdfBtn: { padding: spacing.sm, backgroundColor: colors.accent.blue.bg, borderRadius: radii.sm },
+
+  // Result scroll
+  resultScroll: { flex: 1, paddingHorizontal: spacing.lg },
+  resultScrollContent: { paddingTop: spacing.lg, paddingBottom: 120 },
+
+  // Question cards
+  questionCard: { backgroundColor: colors.background.normal, borderWidth: 1, borderColor: colors.line.normal, padding: spacing.lg, borderRadius: radii.lg, marginBottom: spacing.md, ...shadows.small },
+  questionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
+  questionNumber: { ...typography.heading4, color: colors.primary.normal },
+  questionActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  marksBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.fill.normal, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.line.normal },
+  marksInput: { ...typography.caption, color: colors.label.normal, width: 24, textAlign: 'center', padding: 0 },
+  marksLabel: { ...typography.caption, color: colors.label.assistive, marginLeft: spacing.xs },
+  deleteBtn: { padding: spacing.xs },
+  questionInput: { ...typography.body, color: colors.label.normal, lineHeight: 24, paddingTop: 0 },
+
+  addQuestionBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: spacing.xxl, borderWidth: 2, borderStyle: 'dashed', borderColor: colors.line.normal, borderRadius: radii.lg, marginBottom: 80, backgroundColor: colors.fill.alternative },
+  addQuestionText: { ...typography.button, color: colors.label.assistive, marginLeft: spacing.sm },
+
+  // FAB
+  fabContainer: { position: 'absolute', bottom: spacing.xxxl, left: spacing.xxl, right: spacing.xxl },
+  fab: { backgroundColor: colors.primary.normal, height: 56, borderRadius: radii.full, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', ...shadows.large },
+  fabText: { ...typography.button, color: colors.background.normal, marginRight: spacing.sm, fontSize: 17 },
+
+  // PDF Modal
+  pdfModalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  pdfModalSheet: { backgroundColor: colors.background.normal, borderTopLeftRadius: radii.xxl, borderTopRightRadius: radii.xxl, padding: spacing.xxl, height: '85%' },
+  pdfModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xxl },
+  pdfModalTitle: { ...typography.heading2, color: colors.label.normal },
+
+  templateRow: { flexDirection: 'row', marginBottom: spacing.xxl, gap: spacing.sm },
+  templateOption: { flex: 1, alignItems: 'center', padding: spacing.md, borderRadius: radii.lg, borderWidth: 2 },
+  templateOptionActive: { borderColor: colors.primary.normal, backgroundColor: colors.accent.blue.bg },
+  templateOptionInactive: { borderColor: colors.line.normal, backgroundColor: colors.background.normal },
+  templateIconBox: { marginBottom: spacing.sm },
+  templateLabel: { ...typography.caption, color: colors.label.assistive },
+  templateLabelActive: { color: colors.primary.normal },
+
+  tplIconSimple: { width: 32, height: 40, borderWidth: 1, borderColor: colors.label.assistive, backgroundColor: colors.fill.normal, borderRadius: 2 },
+  tplIconUnit: { width: 32, height: 40, borderWidth: 1, borderColor: colors.label.normal, backgroundColor: colors.background.normal, borderRadius: 2, alignItems: 'center', justifyContent: 'center' },
+  tplIconUnitInner: { width: 24, height: 24, borderWidth: 1, borderColor: colors.line.normal },
+  tplIconFinal: { width: 32, height: 40, borderWidth: 2, borderColor: colors.label.normal, backgroundColor: colors.background.normal, borderRadius: 2 },
+
+  fieldLabel: { ...typography.label, color: colors.label.assistive, marginBottom: spacing.xs, marginLeft: spacing.xs },
+  fieldInput: { backgroundColor: colors.fill.normal, padding: spacing.lg, borderRadius: radii.lg, ...typography.body, color: colors.label.normal, marginBottom: spacing.lg },
+  fieldInputTall: { height: 96 },
+  fieldRow: { flexDirection: 'row', gap: spacing.lg },
+  fieldHalf: { flex: 1 },
+
+  generateBtn: { backgroundColor: colors.label.normal, height: 56, borderRadius: radii.full, justifyContent: 'center', alignItems: 'center', ...shadows.large, marginBottom: spacing.xxxl },
+  generateBtnText: { ...typography.button, color: colors.background.normal, fontSize: 17 },
+
+  // Staging view
+  stagingHeader: { backgroundColor: colors.background.normal, paddingTop: 48, paddingBottom: spacing.lg, paddingHorizontal: spacing.xxl, borderBottomWidth: 1, borderColor: colors.line.normal },
+  stagingTitle: { ...typography.heading1, color: colors.label.normal },
+  stagingSub: { ...typography.body, color: colors.label.alternative },
+
+  stagingScroll: { padding: spacing.xxl, flexGrow: 1 },
+
+  emptyState: { alignItems: 'center', paddingVertical: 80 },
+  emptyIcon: { backgroundColor: colors.fill.strong, padding: spacing.xxl, borderRadius: radii.full, marginBottom: spacing.lg },
+  emptyText: { ...typography.body, color: colors.label.assistive, textAlign: 'center' },
+
+  imageGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
+  imageCard: { marginBottom: spacing.lg, borderRadius: radii.lg, overflow: 'hidden', backgroundColor: colors.background.normal, borderWidth: 2, borderColor: 'transparent', ...shadows.small },
+  imageCardSelected: { borderColor: colors.primary.normal, transform: [{ scale: 0.95 }] },
+  imageThumbnail: { flex: 1 },
+  imageLabel: { backgroundColor: colors.fill.normal, paddingVertical: spacing.sm, borderTopWidth: 1, borderColor: colors.line.normal, alignItems: 'center' },
+  imageLabelText: { ...typography.caption, color: colors.label.alternative },
+  imageOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,102,255,0.2)', justifyContent: 'center', alignItems: 'center' },
+  imageOverlayText: { ...typography.button, color: colors.background.normal, marginTop: spacing.sm },
+  imageRemoveBtn: { position: 'absolute', top: spacing.sm, right: spacing.sm, backgroundColor: colors.status.negative, padding: spacing.sm, borderRadius: radii.full },
+
+  addPageCard: { marginBottom: spacing.lg, borderRadius: radii.lg, borderWidth: 2, borderStyle: 'dashed', borderColor: colors.line.normal, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.fill.alternative },
+  addPageText: { ...typography.buttonSmall, color: colors.label.assistive, marginTop: spacing.sm },
+
+  // Bottom bar
+  bottomBar: { backgroundColor: colors.background.normal, borderTopWidth: 1, borderColor: colors.line.normal, paddingHorizontal: spacing.lg, paddingVertical: spacing.lg },
+  bottomBarEmpty: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  transcribeBtn: { backgroundColor: colors.label.normal, height: 56, borderRadius: radii.xl, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', ...shadows.large },
+  transcribeBtnText: { ...typography.button, color: colors.background.normal, marginLeft: spacing.sm, fontSize: 17 },
+  topicInput: { flex: 1, backgroundColor: colors.fill.normal, borderRadius: radii.full, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  topicInputField: { ...typography.body, color: colors.label.normal },
+  sendBtn: { backgroundColor: colors.fill.strong, borderRadius: radii.full, padding: spacing.md },
+  cameraBtn: { backgroundColor: colors.primary.normal, borderRadius: radii.full, padding: spacing.lg, ...shadows.medium },
+});

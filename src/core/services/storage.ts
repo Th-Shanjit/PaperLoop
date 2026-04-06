@@ -32,7 +32,8 @@ export interface Section {
   title: string;
   layout: '1-column' | '2-column' | '3-column';
   showDivider?: boolean;
-  rescanCount?: number; // NEW: Track free rescans!
+  rescanCount?: number;
+  sourceImageUri?: string;
   questions: Question[];
 }
 
@@ -154,6 +155,7 @@ export interface AppSettings {
   isPro?: boolean;
   scanTokens?: number;
   hasSeenOnboarding?: boolean;
+  hasSeenEditorTour?: boolean;
 }
 
 const SETTINGS_FILE = FileSystem.documentDirectory + 'app_settings.json';

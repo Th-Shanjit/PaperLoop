@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, Image, ActivityIndicator, Linking } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Image, ActivityIndicator, Linking } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter, useNavigation } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -11,27 +11,84 @@ import { getAppSettings, saveAppSettings, AppSettings, clearImageCache, purchase
 import { purchaseScanPack, restorePurchases } from '../core/services/purchases';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
+import { colors, typography, spacing, radii, shadows } from '../core/theme';
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const { alertState, showAlert, closeAlert } = useCustomAlert();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const initialSettingsRef = useRef<string>('');
 
   useEffect(() => {
-    // We refresh this every time the screen loads so the token count is accurate
     const fetchSettings = async () => {
       const data = await getAppSettings();
       setSettings(data);
+      initialSettingsRef.current = JSON.stringify({
+        organizationName: data.organizationName,
+        organizationLogo: data.organizationLogo,
+        defaultDuration: data.defaultDuration,
+        defaultInstructions: data.defaultInstructions,
+        defaultFontTheme: data.defaultFontTheme,
+      });
     };
     fetchSettings();
   }, []);
 
+  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
+    if (!settings) return;
+    const updated = { ...settings, ...patch };
+    setSettings(updated);
+    const comparable = JSON.stringify({
+      organizationName: updated.organizationName,
+      organizationLogo: updated.organizationLogo,
+      defaultDuration: updated.defaultDuration,
+      defaultInstructions: updated.defaultInstructions,
+      defaultFontTheme: updated.defaultFontTheme,
+    });
+    setIsDirty(comparable !== initialSettingsRef.current);
+  }, [settings]);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      if (!isDirty) return;
+      e.preventDefault();
+      showAlert(
+        "Unsaved Changes",
+        "You have unsaved changes. What would you like to do?",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Discard", style: "destructive", onPress: () => navigation.dispatch(e.data.action) },
+          {
+            text: "Save",
+            onPress: async () => {
+              if (settings) {
+                await saveAppSettings(settings);
+              }
+              navigation.dispatch(e.data.action);
+            }
+          }
+        ]
+      );
+    });
+    return unsubscribe;
+  }, [navigation, isDirty, settings, showAlert]);
+
   const handleSave = async () => {
     if (settings) {
       await saveAppSettings(settings);
+      setIsDirty(false);
+      initialSettingsRef.current = JSON.stringify({
+        organizationName: settings.organizationName,
+        organizationLogo: settings.organizationLogo,
+        defaultDuration: settings.defaultDuration,
+        defaultInstructions: settings.defaultInstructions,
+        defaultFontTheme: settings.defaultFontTheme,
+      });
       showAlert("Saved", "Settings updated successfully.");
-      router.back();
     }
   };
 
@@ -137,8 +194,7 @@ export default function SettingsScreen() {
           to: permanentUri
         });
 
-        // Save the permanent URI instead of the temporary one
-        setSettings({ ...settings, organizationLogo: permanentUri });
+        updateSettings({ organizationLogo: permanentUri });
       }
     } catch (error) {
       showAlert("Error", "Could not select the image.");
@@ -150,8 +206,8 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.nav}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.navBtn}>
-          <Ionicons name="arrow-back" size={24} color="#111" />
+        <TouchableOpacity onPress={() => router.back()} style={styles.navBtn} accessibilityLabel="Go back">
+          <Ionicons name="arrow-back" size={24} color={colors.label.normal} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Account & Settings</Text>
         <TouchableOpacity onPress={handleSave} style={styles.navBtn}>
@@ -159,7 +215,11 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        style={styles.content} 
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+      >
         
         {/* --- THE TOKEN BANK --- */}
         <Text style={styles.sectionTitle}>Your Balance</Text>
@@ -169,7 +229,7 @@ export default function SettingsScreen() {
             <Text style={styles.balanceCount}>{settings.scanTokens || 0}</Text>
           </View>
           <View style={styles.iconRing}>
-            <Ionicons name="sparkles" size={28} color="#F59E0B" />
+            <Ionicons name="sparkles" size={28} color={colors.primary.normal} />
           </View>
         </View>
 
@@ -184,8 +244,8 @@ export default function SettingsScreen() {
           >
             <Text style={styles.storeBtnTitle}>10 Scans</Text>
             <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
-              <Text style={{ fontSize: 14, fontWeight: '600', textDecorationLine: 'line-through', color: '#9CA3AF' }}>₹149</Text>
-              <Text style={{ fontSize: 28, fontWeight: '900', color: '#111' }}>₹99</Text>
+              <Text style={{ fontSize: 14, fontWeight: '600', textDecorationLine: 'line-through', color: colors.label.assistive }}>₹149</Text>
+              <Text style={{ fontSize: 28, fontWeight: '900', color: colors.label.normal }}>₹99</Text>
             </View>
           </TouchableOpacity>
 
@@ -195,17 +255,17 @@ export default function SettingsScreen() {
             style={[styles.storeBtn, styles.storeBtnPopular]}
           >
             <View style={styles.popularBadge}><Text style={styles.popularText}>BEST VALUE</Text></View>
-            <Text style={[styles.storeBtnTitle, {color:'white'}]}>50 Scans</Text>
+            <Text style={[styles.storeBtnTitle, { color: colors.background.normal }]}>50 Scans</Text>
             
             {/* THE NEW ANCHOR PRICING LAYOUT */}
             <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
               <Text style={{ fontSize: 14, fontWeight: '600', textDecorationLine: 'line-through', color: 'rgba(255,255,255,0.6)' }}>₹499</Text>
-              <Text style={{ fontSize: 28, fontWeight: '900', color: 'white' }}>₹399</Text>
+              <Text style={{ fontSize: 28, fontWeight: '900', color: colors.background.normal }}>₹399</Text>
             </View>
           </TouchableOpacity>
         </View>
 
-        {isProcessing && <ActivityIndicator size="large" color="#2563EB" style={{ marginTop: 10 }} />}
+        {isProcessing && <ActivityIndicator size="large" color={colors.primary.normal} style={{ marginTop: 10 }} />}
 
         {/* BRANDING SECTION */}
         <Text style={styles.sectionTitle}>Organization Profile</Text>
@@ -216,7 +276,7 @@ export default function SettingsScreen() {
               {settings.organizationLogo ? (
                 <Image source={{uri: settings.organizationLogo}} style={styles.logoImage} />
               ) : (
-                <Ionicons name="camera" size={24} color="#9CA3AF" />
+                <Ionicons name="camera" size={24} color={colors.interaction.inactive} />
               )}
             </TouchableOpacity>
             
@@ -225,7 +285,7 @@ export default function SettingsScreen() {
               <TextInput 
                 style={styles.input} 
                 value={settings.organizationName} 
-                onChangeText={(t) => setSettings({...settings, organizationName: t})}
+                onChangeText={(t) => updateSettings({ organizationName: t })}
                 placeholder="e.g. Aakash Institute"
               />
             </View>
@@ -239,7 +299,7 @@ export default function SettingsScreen() {
           <TextInput 
             style={styles.input} 
             value={settings.defaultDuration} 
-            onChangeText={(t) => setSettings({...settings, defaultDuration: t})}
+            onChangeText={(t) => updateSettings({ defaultDuration: t })}
           />
           
           <Text style={[styles.label, {marginTop: 16}]}>DEFAULT INSTRUCTIONS</Text>
@@ -247,58 +307,84 @@ export default function SettingsScreen() {
             style={[styles.input, {height: 80, textAlignVertical: 'top'}]} 
             multiline 
             value={settings.defaultInstructions} 
-            onChangeText={(t) => setSettings({...settings, defaultInstructions: t})}
+            onChangeText={(t) => updateSettings({ defaultInstructions: t })}
           />
+        </View>
+
+        {/* HELP & TOURS */}
+        <Text style={styles.sectionTitle}>Help & Tours</Text>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.actionRow} onPress={async () => {
+            if (!settings) return;
+            await saveAppSettings({ ...settings, hasSeenOnboarding: false });
+            showAlert("Done", "The app walkthrough will show next time you open the app.");
+          }}>
+            <View style={styles.actionLeft}>
+              <Ionicons name="play-circle-outline" size={20} color={colors.primary.normal} />
+              <Text style={styles.actionText}>Replay App Walkthrough</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.interaction.inactive} />
+          </TouchableOpacity>
+          <View style={styles.divider} />
+          <TouchableOpacity style={styles.actionRow} onPress={async () => {
+            if (!settings) return;
+            await saveAppSettings({ ...settings, hasSeenEditorTour: false });
+            showAlert("Done", "Open any exam in the editor and the feature tour will start automatically.");
+          }}>
+            <View style={styles.actionLeft}>
+              <Ionicons name="compass-outline" size={20} color={colors.primary.normal} />
+              <Text style={styles.actionText}>Replay Editor Feature Tour</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.interaction.inactive} />
+          </TouchableOpacity>
         </View>
 
         {/* DATA & STORAGE */}
         <Text style={styles.sectionTitle}>System</Text>
         <View style={[styles.card, {marginBottom: 40}]}>
-         
-          
+
           <TouchableOpacity style={styles.actionRow} onPress={handleRestore}>
             <View style={styles.actionLeft}>
-              <Ionicons name="refresh-circle-outline" size={20} color="#6B7280" />
+              <Ionicons name="refresh-circle-outline" size={20} color={colors.label.alternative} />
               <Text style={styles.actionText}>Restore Purchases</Text>
             </View>
-            <Ionicons name="chevron-forward" size={16} color="#ccc" />
+            <Ionicons name="chevron-forward" size={16} color={colors.interaction.inactive} />
           </TouchableOpacity>
           <View style={styles.divider} />
 
           <TouchableOpacity style={styles.actionRow} onPress={handleClearCache}>
             <View style={styles.actionLeft}>
-              <Ionicons name="trash-bin-outline" size={20} color="#DC2626" />
-              <Text style={[styles.actionText, {color: '#DC2626'}]}>Clear Temporary Cache</Text>
+              <Ionicons name="trash-bin-outline" size={20} color={colors.status.negative} />
+              <Text style={[styles.actionText, {color: colors.status.negative}]}>Clear Temporary Cache</Text>
             </View>
-            <Ionicons name="chevron-forward" size={16} color="#ccc" />
+            <Ionicons name="chevron-forward" size={16} color={colors.interaction.inactive} />
           </TouchableOpacity>
           <View style={styles.divider} />
           
           <TouchableOpacity style={styles.actionRow} onPress={contactSupport}>
             <View style={styles.actionLeft}>
-              <Ionicons name="logo-whatsapp" size={20} color="#16A34A" />
+              <Ionicons name="logo-whatsapp" size={20} color={colors.status.positive} />
               <Text style={styles.actionText}>Contact Support</Text>
             </View>
-            <Ionicons name="chevron-forward" size={16} color="#ccc" />
+            <Ionicons name="chevron-forward" size={16} color={colors.interaction.inactive} />
           </TouchableOpacity>
           <View style={styles.divider} />
 
-          {/* THE NEW LEGAL LINKS */}
           <TouchableOpacity style={styles.actionRow} onPress={() => Linking.openURL('https://www.shanjitthokchom.xyz/docs/paperloopprivacy')}>
             <View style={styles.actionLeft}>
-              <Ionicons name="shield-checkmark-outline" size={20} color="#6B7280" />
+              <Ionicons name="shield-checkmark-outline" size={20} color={colors.label.alternative} />
               <Text style={styles.actionText}>Privacy Policy</Text>
             </View>
-            <Ionicons name="open-outline" size={16} color="#ccc" />
+            <Ionicons name="open-outline" size={16} color={colors.interaction.inactive} />
           </TouchableOpacity>
           <View style={styles.divider} />
           
           <TouchableOpacity style={styles.actionRow} onPress={() => Linking.openURL('https://www.shanjitthokchom.xyz/docs/termspaperloop')}>
             <View style={styles.actionLeft}>
-              <Ionicons name="document-text-outline" size={20} color="#6B7280" />
+              <Ionicons name="document-text-outline" size={20} color={colors.label.alternative} />
               <Text style={styles.actionText}>Terms of Service</Text>
             </View>
-            <Ionicons name="open-outline" size={16} color="#ccc" />
+            <Ionicons name="open-outline" size={16} color={colors.interaction.inactive} />
           </TouchableOpacity>
         </View>
 
@@ -310,40 +396,39 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F3F4F6' },
-  nav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#E5E7EB' },
-  navBtn: { padding: 4 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#111' },
-  saveText: { fontSize: 16, fontWeight: '600', color: '#2563EB' },
-  content: { flex: 1, padding: 20 },
-  sectionTitle: { fontSize: 13, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', marginBottom: 8, marginLeft: 4, marginTop: 16 },
+  container: { flex: 1, backgroundColor: colors.background.alternative },
+  nav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg, paddingVertical: spacing.lg, backgroundColor: colors.background.normal, borderBottomWidth: 1, borderColor: colors.line.normal },
+  navBtn: { padding: spacing.xs },
+  headerTitle: { ...typography.heading3, color: colors.label.normal },
+  saveText: { ...typography.button, color: colors.primary.normal },
+  content: { flex: 1, padding: spacing.xl },
+  sectionTitle: { ...typography.label, color: colors.label.alternative, marginBottom: spacing.sm, marginLeft: spacing.xs, marginTop: spacing.lg },
   
-  // Store UI
-  balanceCard: { backgroundColor: '#FFFBEB', borderRadius: 16, padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: '#FEF3C7', shadowColor: "#F59E0B", shadowOpacity: 0.1, elevation: 2 },
-  balanceLabel: { fontSize: 13, fontWeight: '700', color: '#B45309', textTransform: 'uppercase', letterSpacing: 0.5 },
-  balanceCount: { fontSize: 40, fontWeight: '900', color: '#92400E' },
-  iconRing: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#FEF3C7', justifyContent: 'center', alignItems: 'center' },
+  balanceCard: { backgroundColor: colors.accent.blue.bg, borderRadius: radii.lg, padding: spacing.xl, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: colors.accent.blue.bgStrong, ...shadows.small },
+  balanceLabel: { ...typography.label, color: colors.primary.strong },
+  balanceCount: { ...typography.heading1, fontSize: 40, color: colors.primary.normal },
+  iconRing: { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.accent.blue.bgStrong, justifyContent: 'center', alignItems: 'center' },
   
-  storeRow: { flexDirection: 'row', gap: 12 },
-  storeBtn: { flex: 1, backgroundColor: 'white', borderRadius: 16, padding: 20, alignItems: 'center', borderWidth: 1, borderColor: '#E5E7EB', shadowColor: "#000", shadowOpacity: 0.05, elevation: 2 },
-  storeBtnPopular: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
-  storeBtnTitle: { fontSize: 18, fontWeight: '800', color: '#111', marginBottom: 4 },
+  storeRow: { flexDirection: 'row', gap: spacing.md },
+  storeBtn: { flex: 1, backgroundColor: colors.background.normal, borderRadius: radii.lg, padding: spacing.xl, alignItems: 'center', borderWidth: 1, borderColor: colors.line.normal, ...shadows.small },
+  storeBtnPopular: { backgroundColor: colors.primary.normal, borderColor: colors.primary.normal },
+  storeBtnTitle: { ...typography.heading3, color: colors.label.normal, marginBottom: 4 },
   priceContainer: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  storeBtnPrice: { fontSize: 14, fontWeight: '600', color: '#6B7280' },
-  storeBtnPriceStrikethrough: { fontSize: 12, fontWeight: '500', textDecorationLine: 'line-through', color: '#6B7280' },
-  popularBadge: { position: 'absolute', top: -10, backgroundColor: '#F59E0B', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 2, borderColor: '#F3F4F6' },
-  popularText: { fontSize: 10, fontWeight: '900', color: 'white' },
+  storeBtnPrice: { fontSize: 14, fontWeight: '600', color: colors.label.alternative },
+  storeBtnPriceStrikethrough: { fontSize: 12, fontWeight: '500', textDecorationLine: 'line-through', color: colors.label.alternative },
+  popularBadge: { position: 'absolute', top: -10, backgroundColor: colors.status.cautionary, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.sm, borderWidth: 2, borderColor: colors.background.alternative },
+  popularText: { fontSize: 10, fontWeight: '900', color: colors.background.normal },
 
-  card: { backgroundColor: 'white', borderRadius: 16, padding: 16, shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 5, elevation: 1 },
-  label: { fontSize: 10, fontWeight: '800', color: '#9CA3AF', marginBottom: 6, letterSpacing: 0.5 },
-  input: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8, padding: 12, fontSize: 14, color: '#111', fontWeight: '500' },
-  logoRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  logoCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E5E7EB', borderStyle: 'dashed' },
+  card: { backgroundColor: colors.background.normal, borderRadius: radii.lg, padding: spacing.lg, ...shadows.small },
+  label: { ...typography.label, color: colors.label.assistive, marginBottom: 6 },
+  input: { backgroundColor: colors.fill.alternative, borderWidth: 1, borderColor: colors.line.normal, borderRadius: radii.sm, padding: spacing.md, ...typography.body, color: colors.label.normal },
+  logoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
+  logoCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.fill.normal, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: colors.line.normal, borderStyle: 'dashed' },
   logoImage: { width: 64, height: 64, borderRadius: 32 },
-  proBadge: { position: 'absolute', bottom: -5, backgroundColor: '#111', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, borderWidth: 1, borderColor: 'white' },
-  proText: { fontSize: 8, color: 'white', fontWeight: '800' },
-  actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 },
-  actionLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  actionText: { fontSize: 15, fontWeight: '500', color: '#374151' },
-  divider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 8 }
+  proBadge: { position: 'absolute', bottom: -5, backgroundColor: colors.label.normal, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.background.normal },
+  proText: { fontSize: 8, color: colors.background.normal, fontWeight: '800' },
+  actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 52, paddingVertical: spacing.md, paddingHorizontal: spacing.xs },
+  actionLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  actionText: { ...typography.body, color: colors.label.alternative },
+  divider: { height: 1, backgroundColor: colors.line.alternative, marginVertical: spacing.xs }
 });

@@ -1,9 +1,9 @@
 import React, { useState, useCallback } from 'react';
 import { 
   View, Text, Image, TouchableOpacity, FlatList, 
-  StyleSheet, Modal, StatusBar, Alert, ActivityIndicator, TextInput, KeyboardAvoidingView, Platform 
+  StyleSheet, Modal, StatusBar, Alert, ActivityIndicator, TextInput, KeyboardAvoidingView, Platform, Dimensions 
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -14,9 +14,13 @@ import { transcribeHandwriting } from '../core/services/gemini';
 import { deductScanToken, getAppSettings } from '../core/services/storage';
 import CustomAlert from '../components/CustomAlert';
 import { useCustomAlert } from '../hooks/useCustomAlert';
+import { usePostHog } from 'posthog-react-native';
+import { colors, typography, spacing, radii, shadows } from '../core/theme';
 
 export default function WorkspaceScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const posthog = usePostHog();
   const { alertState, showAlert, closeAlert } = useCustomAlert();
   const [pages, setPages] = useState<ScannedPage[]>([]);
   const [selectedImage, setSelectedImage] = useState<ScannedPage | null>(null);
@@ -110,11 +114,14 @@ export default function WorkspaceScreen() {
     setScanStatus('Warming up AI engine...'); 
     
     try {
-      // #region agent log
-      const mappedPages = pages.map(p => ({ uri: p.localUri, width: p.width, height: p.height }));
-      fetch('http://127.0.0.1:7459/ingest/96cc0c91-64f8-4192-b458-5e6913215ddd',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'88dc6d'},body:JSON.stringify({sessionId:'88dc6d',location:'workspace.tsx:handleAnalyze',message:'pages mapped for transcription',data:{pageCount:mappedPages.length,firstPageUri:mappedPages[0]?.uri?.substring?.(0,80),firstPageUriType:typeof mappedPages[0]?.uri},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
-      const result = await transcribeHandwriting(mappedPages, (msg) => setScanStatus(msg));
+      const startTime = Date.now();
+      const result = await transcribeHandwriting(
+        pages.map(p => ({ uri: p.localUri, width: p.width, height: p.height })),
+        (msg) => setScanStatus(msg)
+      );
+      posthog?.capture('ai_scan_success', {
+        duration_seconds: (Date.now() - startTime) / 1000,
+      });
       
       // 1. Count the total questions found across all scanned pages
       let totalQuestions = 0;
@@ -234,7 +241,10 @@ export default function WorkspaceScreen() {
       // Rule 3: Success! Run the processing and charge the tokens.
       await finishProcessing();
 
-    } catch (e) {
+    } catch (e: any) {
+      posthog?.capture('ai_scan_failed', {
+        error_message: e?.message ?? String(e),
+      });
       showAlert("Analysis Failed", "Please try again.");
       console.error(e);
       setIsAnalyzing(false);
@@ -242,36 +252,32 @@ export default function WorkspaceScreen() {
     }
   };
 
+  const cardWidth = (Dimensions.get('window').width - 16 * 2 - 10) / 2;
+
   const renderItem = ({ item, index }: { item: ScannedPage, index: number }) => (
-    <View style={styles.card}>
+    <View style={[styles.card, { width: cardWidth }]}>
       <TouchableOpacity onPress={() => setSelectedImage(item)} style={styles.cardImageContainer}>
         <Image 
           source={{ uri: item.localUri }} 
           style={[styles.thumbnail, { transform: [{ rotate: `${item.rotation}deg` }] }]} 
         />
+        <View style={styles.pageBadgeOverlay}>
+          <Text style={styles.pageText}>Pg {index + 1}</Text>
+        </View>
       </TouchableOpacity>
       
       <View style={styles.cardToolbar}>
-        <TouchableOpacity onPress={() => openReorder(index)} style={styles.pageBadge}>
-           <Text style={styles.pageText}>Pg {index + 1}</Text>
-           <Ionicons name="create-outline" size={12} color="white" style={{marginLeft:4}} />
+        <TouchableOpacity onPress={() => openReorder(index)} style={styles.reorderBtn}>
+           <Ionicons name="swap-vertical" size={14} color={colors.primary.normal} />
+           <Text style={styles.reorderText}>Move</Text>
         </TouchableOpacity>
 
-        <View style={{flexDirection:'row', gap: 8}}>
-          <TouchableOpacity onPress={() => handleSwap(index, 'left')} disabled={index===0} style={styles.miniBtn}>
-            <Ionicons name="caret-back" size={16} color={index===0 ? "#ccc" : "#555"} />
+        <View style={{flexDirection:'row', gap: 6}}>
+          <TouchableOpacity onPress={() => handleRotatePage(index)} style={styles.miniBtn} accessibilityLabel="Rotate page">
+            <Ionicons name="refresh" size={14} color={colors.label.alternative} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => handleSwap(index, 'right')} disabled={index===pages.length-1} style={styles.miniBtn}>
-            <Ionicons name="caret-forward" size={16} color={index===pages.length-1 ? "#ccc" : "#555"} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={{flexDirection:'row', gap: 8}}>
-          <TouchableOpacity onPress={() => handleRotatePage(index)} style={styles.miniBtn}>
-            <Ionicons name="refresh" size={16} color="#555" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => handleDeletePage(index)} style={[styles.miniBtn, {backgroundColor:'#fee2e2'}]}>
-            <Ionicons name="trash" size={16} color="#dc2626" />
+          <TouchableOpacity onPress={() => handleDeletePage(index)} style={[styles.miniBtn, {backgroundColor: colors.status.negativeBg}]} accessibilityLabel="Delete page">
+            <Ionicons name="trash" size={14} color={colors.status.negative} />
           </TouchableOpacity>
         </View>
       </View>
@@ -280,16 +286,16 @@ export default function WorkspaceScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F3F4F6" />
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background.alternative} />
       <View style={styles.header}>
         {pages.length > 0 ? (
-          <TouchableOpacity onPress={handleExit} style={styles.backBtn}>
-            <Ionicons name="close" size={24} color="#1F2937" />
+          <TouchableOpacity onPress={handleExit} style={styles.backBtn} accessibilityLabel="Discard and go home">
+            <Ionicons name="close" size={24} color={colors.label.normal} />
             <Text style={styles.backText}>Discard</Text>
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity onPress={() => router.replace("/")} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={24} color="#1F2937" />
+          <TouchableOpacity onPress={() => router.replace("/")} style={styles.backBtn} accessibilityLabel="Go back">
+            <Ionicons name="arrow-back" size={24} color={colors.label.normal} />
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
         )}
@@ -306,25 +312,25 @@ export default function WorkspaceScreen() {
           <Text style={styles.emptyStateSub}>Choose how you want to start</Text>
 
           <TouchableOpacity onPress={handleOpenScanner} style={styles.actionCard}>
-            <View style={[styles.actionIconBg, { backgroundColor: '#EFF6FF' }]}>
-              <Ionicons name="scan" size={32} color="#2563EB" />
+            <View style={[styles.actionIconBg, { backgroundColor: colors.accent.blue.bg }]}>
+              <Ionicons name="scan" size={32} color={colors.primary.normal} />
             </View>
             <View style={styles.actionTextContent}>
               <Text style={styles.actionTitle}>Scan a Worksheet</Text>
               <Text style={styles.actionDesc}>Use camera or gallery to AI-digitize</Text>
             </View>
-            <Ionicons name="chevron-forward" size={24} color="#D1D5DB" />
+            <Ionicons name="chevron-forward" size={24} color={colors.interaction.inactive} />
           </TouchableOpacity>
 
           <TouchableOpacity onPress={() => router.push({ pathname: "/editor", params: { initialData: JSON.stringify([]) } })} style={styles.actionCard}>
-            <View style={[styles.actionIconBg, { backgroundColor: '#F3F4F6' }]}>
-              <Ionicons name="document-text" size={32} color="#4B5563" />
+            <View style={[styles.actionIconBg, { backgroundColor: colors.background.alternative }]}>
+              <Ionicons name="document-text" size={32} color={colors.label.alternative} />
             </View>
             <View style={styles.actionTextContent}>
               <Text style={styles.actionTitle}>Start Blank Exam</Text>
               <Text style={styles.actionDesc}>Create from scratch using the editor</Text>
             </View>
-            <Ionicons name="chevron-forward" size={24} color="#D1D5DB" />
+            <Ionicons name="chevron-forward" size={24} color={colors.interaction.inactive} />
           </TouchableOpacity>
         </View>
       ) : (
@@ -332,27 +338,29 @@ export default function WorkspaceScreen() {
           data={pages}
           renderItem={renderItem}
           keyExtractor={(item, index) => `${index}-${item.localUri}`} 
-          contentContainerStyle={styles.grid}
+          numColumns={2}
+          columnWrapperStyle={{ gap: 10 }}
+          contentContainerStyle={[styles.grid, { paddingBottom: insets.bottom + 140 }]}
           showsVerticalScrollIndicator={false}
         />
       )}
 
       {pages.length > 0 && (
-        <View style={styles.fabContainer}>
+        <View style={[styles.fabContainer, { paddingBottom: Platform.OS === 'ios' ? 24 : 16 }]}>
            <TouchableOpacity onPress={handleOpenScanner} style={styles.addBtn}>
-              <Ionicons name="camera" size={24} color="#2563EB" />
+              <Ionicons name="camera" size={20} color={colors.primary.normal} />
               <Text style={styles.addBtnText}>Add Page</Text>
            </TouchableOpacity>
 
-           <View style={{flex: 1, marginLeft: 16}}>
-             <Text style={{fontSize: 11, fontWeight: '600', color: '#6B7280', textAlign: 'center', marginBottom: 6}}>
+           <View style={{flex: 1, marginLeft: spacing.md}}>
+             <Text style={{fontSize: 11, fontWeight: '600', color: colors.label.alternative, textAlign: 'center', marginBottom: 4}}>
                {tokensLeft} Scans Remaining
              </Text>
-             <TouchableOpacity onPress={handleAnalyze} disabled={isAnalyzing} style={[styles.analyzeBtn, {marginLeft: 0}]}>
-               {isAnalyzing ? <ActivityIndicator color="white"/> : (
+             <TouchableOpacity onPress={handleAnalyze} disabled={isAnalyzing} style={styles.analyzeBtn}>
+               {isAnalyzing ? <ActivityIndicator color={colors.static.white}/> : (
                  <>
                    <Text style={styles.analyzeText}>Analyze {pages.length} Pages</Text>
-                   <Ionicons name="arrow-forward" size={20} color="white" style={{marginLeft:8}}/>
+                   <Ionicons name="arrow-forward" size={18} color={colors.static.white} style={{marginLeft: 6}}/>
                  </>
                )}
              </TouchableOpacity>
@@ -377,8 +385,8 @@ export default function WorkspaceScreen() {
               <TouchableOpacity onPress={() => setReorderModalVisible(false)} style={styles.dialogBtn}>
                 <Text style={styles.dialogBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={confirmReorder} style={[styles.dialogBtn, {backgroundColor:'#2563EB'}]}>
-                <Text style={[styles.dialogBtnText, {color:'white'}]}>Move</Text>
+              <TouchableOpacity onPress={confirmReorder} style={[styles.dialogBtn, {backgroundColor: colors.primary.normal}]}>
+                <Text style={[styles.dialogBtnText, {color: colors.static.white}]}>Move</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -396,8 +404,8 @@ export default function WorkspaceScreen() {
                 resizeMode="contain" 
               />
             )}
-            <TouchableOpacity onPress={() => setSelectedImage(null)} style={styles.fsClose}>
-              <Ionicons name="close" size={24} color="black" />
+            <TouchableOpacity onPress={() => setSelectedImage(null)} style={styles.fsClose} accessibilityLabel="Close preview">
+              <Ionicons name="close" size={24} color={colors.label.strong} />
             </TouchableOpacity>
           </View>
         </View>
@@ -409,7 +417,7 @@ export default function WorkspaceScreen() {
           <View style={styles.loadingBox}>
             <View style={styles.loadingHeader}>
               <View style={styles.loadingIconRing}>
-                <ActivityIndicator size="small" color="#fff" />
+                <ActivityIndicator size="small" color={colors.static.white} />
               </View>
               <Text style={styles.loadingTitle}>Scanning Pages</Text>
             </View>
@@ -429,7 +437,7 @@ export default function WorkspaceScreen() {
               return (
                 <View key={step.key} style={styles.stepRow}>
                   <View style={[styles.stepDot, isDone && styles.stepDotDone, isActive && styles.stepDotActive]}>
-                    {isDone ? <Text style={styles.stepDotText}>✓</Text> : isActive ? <ActivityIndicator size="small" color="#fff" style={{ transform: [{ scale: 0.6 }] }} /> : <Text style={styles.stepDotText}>{index + 1}</Text>}
+                    {isDone ? <Text style={styles.stepDotText}>✓</Text> : isActive ? <ActivityIndicator size="small" color={colors.static.white} style={{ transform: [{ scale: 0.6 }] }} /> : <Text style={styles.stepDotText}>{index + 1}</Text>}
                   </View>
                   <Text style={[styles.stepLabel, isDone && styles.stepLabelDone, isActive && styles.stepLabelActive]}>
                     {step.icon} {step.label}
@@ -449,61 +457,63 @@ export default function WorkspaceScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F3F4F6' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#E5E7EB' },
+  container: { flex: 1, backgroundColor: colors.background.alternative },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.lg, backgroundColor: colors.background.normal, borderBottomWidth: 1, borderColor: colors.line.normal },
   backBtn: { flexDirection: 'row', alignItems: 'center', width: 80 },
-  backText: { color: '#1F2937', fontSize: 16, marginLeft: 4 },
-  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827' },
-  headerSub: { fontSize: 12, color: '#6B7280' },
-  grid: { padding: 16, paddingBottom: 120 },
-  card: { backgroundColor: 'white', borderRadius: 12, marginBottom: 16, overflow: 'hidden', elevation: 2, shadowColor: "#000", shadowOpacity: 0.05 },
-  cardImageContainer: { height: 200, backgroundColor: '#E5E7EB' },
+  backText: { color: colors.label.normal, fontSize: 15, fontWeight: '600', marginLeft: 4 },
+  headerTitle: { ...typography.heading3, color: colors.label.normal },
+  headerSub: { ...typography.caption, color: colors.label.alternative },
+  grid: { padding: spacing.lg, paddingBottom: 140 },
+  card: { backgroundColor: colors.background.normal, borderRadius: radii.lg, marginBottom: spacing.md, overflow: 'hidden', ...shadows.small },
+  cardImageContainer: { height: 130, backgroundColor: colors.fill.normal, position: 'relative' },
   thumbnail: { width: '100%', height: '100%', resizeMode: 'contain' },
-  cardToolbar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 10, borderTopWidth: 1, borderColor: '#F3F4F6' },
-  pageBadge: { backgroundColor: '#2563EB', flexDirection:'row', alignItems:'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
-  pageText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
-  miniBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center' },
-  fabContainer: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'white', padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderColor: '#E5E7EB' },
-  addBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EFF6FF', paddingHorizontal: 20, height: 50, borderRadius: 25 },
-  addBtnText: { color: '#2563EB', fontWeight: 'bold', marginLeft: 8 },
-  analyzeBtn: { flex: 1, marginLeft: 16, backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 50, borderRadius: 25, shadowColor: "#000", shadowOpacity: 0.2, elevation: 3 },
-  analyzeText: { fontWeight: 'bold', fontSize: 16, color: 'white' },
-  emptyStateContainer: { flex: 1, padding: 24, justifyContent: 'center' },
-  emptyStateHeading: { fontSize: 24, fontWeight: 'bold', color: '#111827', marginBottom: 8, textAlign: 'center' },
-  emptyStateSub: { fontSize: 14, color: '#6B7280', marginBottom: 32, textAlign: 'center' },
-  actionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', padding: 20, borderRadius: 16, marginBottom: 16, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 3, borderWidth: 1, borderColor: '#F3F4F6' },
-  actionIconBg: { width: 64, height: 64, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  pageBadgeOverlay: { position: 'absolute', top: spacing.sm, left: spacing.sm, backgroundColor: colors.primary.normal, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radii.sm },
+  pageText: { color: colors.static.white, fontWeight: '800', fontSize: 10 },
+  cardToolbar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.sm, borderTopWidth: 1, borderColor: colors.line.alternative },
+  reorderBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 4 },
+  reorderText: { fontSize: 11, fontWeight: '600', color: colors.primary.normal },
+  miniBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.fill.normal, justifyContent: 'center', alignItems: 'center' },
+  fabContainer: { backgroundColor: colors.background.normal, padding: spacing.lg, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderColor: colors.line.normal },
+  addBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background.normal, paddingHorizontal: spacing.lg, height: 48, borderRadius: radii.full, borderWidth: 1, borderColor: colors.primary.normal },
+  addBtnText: { color: colors.primary.normal, fontWeight: '700', fontSize: 14, marginLeft: 6 },
+  analyzeBtn: { flex: 1, backgroundColor: colors.primary.normal, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 48, borderRadius: radii.full, ...shadows.small },
+  analyzeText: { fontWeight: '800', fontSize: 15, color: colors.static.white },
+  emptyStateContainer: { flex: 1, padding: spacing.xxl, justifyContent: 'center' },
+  emptyStateHeading: { ...typography.heading1, color: colors.label.normal, marginBottom: spacing.sm, textAlign: 'center' },
+  emptyStateSub: { ...typography.body, color: colors.label.alternative, marginBottom: spacing.xxxl, textAlign: 'center' },
+  actionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background.normal, padding: spacing.xl, borderRadius: radii.lg, marginBottom: spacing.lg, ...shadows.small, borderWidth: 1, borderColor: colors.line.alternative },
+  actionIconBg: { width: 56, height: 56, borderRadius: radii.lg, justifyContent: 'center', alignItems: 'center', marginRight: spacing.lg },
   actionTextContent: { flex: 1 },
-  actionTitle: { fontSize: 17, fontWeight: '700', color: '#1F2937', marginBottom: 4 },
-  actionDesc: { fontSize: 13, color: '#6B7280' },
-  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  dialog: { backgroundColor: 'white', borderRadius: 16, padding: 24, width: '100%', maxWidth: 340 },
-  dialogTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 8, color: '#111' },
-  dialogSub: { fontSize: 14, color: '#666', marginBottom: 20 },
-  dialogInput: { backgroundColor: '#F3F4F6', fontSize: 24, fontWeight: 'bold', textAlign: 'center', padding: 16, borderRadius: 12, marginBottom: 20 },
-  dialogActions: { flexDirection: 'row', gap: 12 },
-  dialogBtn: { flex: 1, padding: 14, borderRadius: 12, alignItems: 'center', backgroundColor: '#F3F4F6' },
-  dialogBtnText: { fontWeight: 'bold', color: '#333' },
+  actionTitle: { ...typography.heading4, color: colors.label.normal, marginBottom: 4 },
+  actionDesc: { ...typography.bodySmall, color: colors.label.alternative },
+  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: spacing.xl },
+  dialog: { backgroundColor: colors.background.normal, borderRadius: radii.lg, padding: spacing.xxl, width: '100%', maxWidth: 340 },
+  dialogTitle: { ...typography.heading2, marginBottom: spacing.sm, color: colors.label.normal },
+  dialogSub: { ...typography.body, color: colors.label.alternative, marginBottom: spacing.xl },
+  dialogInput: { backgroundColor: colors.fill.normal, fontSize: 24, fontWeight: 'bold', textAlign: 'center', padding: spacing.lg, borderRadius: radii.md, marginBottom: spacing.xl, color: colors.label.normal },
+  dialogActions: { flexDirection: 'row', gap: spacing.md },
+  dialogBtn: { flex: 1, padding: 14, borderRadius: radii.md, alignItems: 'center', backgroundColor: colors.fill.normal },
+  dialogBtnText: { fontWeight: 'bold', color: colors.label.normal },
   modalBackdrop: { ...StyleSheet.absoluteFillObject },
-  fsContent: { width: '90%', height: '80%', backgroundColor: 'white', borderRadius: 16, overflow: 'hidden' },
+  fsContent: { width: '92%', height: '80%', backgroundColor: colors.background.normal, borderRadius: radii.lg, overflow: 'hidden' },
   fullImage: { width: '100%', height: '100%' },
-  fsClose: { position: 'absolute', top: 16, right: 16, backgroundColor: 'rgba(255,255,255,0.8)', borderRadius: 20, padding: 8 },
+  fsClose: { position: 'absolute', top: 16, right: 16, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 20, padding: 8 },
 
   // --- Scan Progress Overlay ---
   loadingOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', alignItems: 'center', zIndex: 999 },
-  loadingBox: { backgroundColor: '#fff', borderRadius: 20, padding: 28, width: 300, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 16, elevation: 12 },
+  loadingBox: { backgroundColor: colors.background.normal, borderRadius: radii.xxl, padding: 28, width: 300, ...shadows.large },
   loadingHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
-  loadingIconRing: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#2563EB', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  loadingTitle: { fontSize: 17, fontWeight: '800', color: '#111' },
+  loadingIconRing: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primary.normal, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  loadingTitle: { fontSize: 17, fontWeight: '800', color: colors.label.normal },
   stepRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, position: 'relative' },
-  stepDot: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#E5E7EB', justifyContent: 'center', alignItems: 'center', marginRight: 12, zIndex: 1 },
-  stepDotActive: { backgroundColor: '#2563EB' },
-  stepDotDone: { backgroundColor: '#16A34A' },
-  stepDotText: { fontSize: 11, fontWeight: '700', color: '#9CA3AF' },
-  stepLabel: { fontSize: 14, fontWeight: '500', color: '#9CA3AF', flex: 1 },
-  stepLabelActive: { color: '#2563EB', fontWeight: '700' },
-  stepLabelDone: { color: '#16A34A', fontWeight: '600' },
-  stepConnector: { position: 'absolute', left: 13, top: 28, width: 2, height: 14, backgroundColor: '#E5E7EB', zIndex: 0 },
-  stepConnectorDone: { backgroundColor: '#16A34A' },
-  loadingStatusText: { marginTop: 12, fontSize: 12, color: '#6B7280', fontWeight: '500', textAlign: 'center' }
+  stepDot: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.line.normal, justifyContent: 'center', alignItems: 'center', marginRight: 12, zIndex: 1 },
+  stepDotActive: { backgroundColor: colors.primary.normal },
+  stepDotDone: { backgroundColor: colors.status.positive },
+  stepDotText: { fontSize: 11, fontWeight: '700', color: colors.label.assistive },
+  stepLabel: { fontSize: 14, fontWeight: '500', color: colors.label.assistive, flex: 1 },
+  stepLabelActive: { color: colors.primary.normal, fontWeight: '700' },
+  stepLabelDone: { color: colors.status.positive, fontWeight: '600' },
+  stepConnector: { position: 'absolute', left: 13, top: 28, width: 2, height: 14, backgroundColor: colors.line.normal, zIndex: 0 },
+  stepConnectorDone: { backgroundColor: colors.status.positive },
+  loadingStatusText: { marginTop: 12, fontSize: 12, color: colors.label.alternative, fontWeight: '500', textAlign: 'center' }
 });

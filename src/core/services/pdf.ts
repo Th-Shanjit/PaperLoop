@@ -281,7 +281,7 @@ export const generateExamHtml = async (
           @page { size: A4; margin: 15mm; } 
           
           /* 2. BASE TYPOGRAPHY: Better line-height for readability */
-          body { color: #111; background: white; font-size: 11pt; line-height: 1.45; }
+          body { color: #111; background: white; font-size: 11pt; line-height: 1.15; }
 
           /* --- REPLACE .header WITH THIS: --- */
           .header-wrapper { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16pt; border-bottom: 2pt solid #111; padding-bottom: 12pt; }
@@ -295,12 +295,11 @@ export const generateExamHtml = async (
 
           .instructions { background: #f8f9fa; padding: 12pt; font-size: 10pt; margin-bottom: 18pt; border-left: 3pt solid #111; line-height: 1.5; }
 
-          .section-container { margin-bottom: 24pt; }
+          .section-container { margin-bottom: 24pt; page-break-before: auto; page-break-after: auto; orphans: 2; widows: 2; }
           .section-title { font-size: 13pt; font-weight: 800; text-transform: uppercase; margin-bottom: 10pt; padding-bottom: 4pt; }
           .section-title-divider { border-top: 2pt solid #111; padding-top: 16pt; margin-top: 16pt; }
 
-          /* 3. QUESTION SPACING: Doubled the bottom margin from 8pt to 16pt so questions are clearly separated */
-          .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 16pt; }
+          .q-item { break-inside: avoid; page-break-inside: avoid; display: inline-block; width: 100%; margin-bottom: 16pt; overflow: hidden; }
           .span-all { column-span: all; display: block; margin-bottom: 16pt; }
           .q-row { display: flex; flex-direction: row; }
           
@@ -308,7 +307,7 @@ export const generateExamHtml = async (
           .q-num { min-width: 38pt; width: auto; padding-right: 8pt; font-weight: 800; font-size: 11.5pt; flex-shrink: 0; }
           
           .q-content { flex: 1; padding-right: 10pt; }
-          .q-text { white-space: pre-wrap; font-size: 11.5pt; margin-bottom: 6pt; margin-top: 0; }
+          .q-text { white-space: pre-wrap; font-size: 11.5pt; line-height: 1.15; margin-bottom: 6pt; margin-top: 0; }
           .q-marks { min-width: 40pt; text-align: right; font-weight: 700; font-size: 10.5pt; white-space: nowrap; flex-shrink: 0; }
 
           /* 5. MCQ SPACING: Added more gap between grid items so options don't clump together */
@@ -356,7 +355,7 @@ export const generateExamHtml = async (
           return `
           <div class="section-container">
             <div class="section-title ${sec.showDivider ? 'section-title-divider' : ''}">${latexToHtml(sec.title)}</div>
-            <div style="column-count: ${getColumnCount(sec.layout)}; column-gap: 20pt;">
+            <div style="column-count: ${getColumnCount(sec.layout)}; column-gap: 20pt; column-fill: auto;">
               ${visibleQs.map((q, idx) => {
                 const sizeKey = (q as any).diagramSize || 'M';
                 const imgHeight = DIAGRAM_HEIGHTS[sizeKey] || '180px';

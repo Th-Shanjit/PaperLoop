@@ -1,7 +1,18 @@
-import Purchases, { CustomerInfo, PurchasesOffering } from 'react-native-purchases';
-import { Platform, Alert } from 'react-native';
+import { Platform } from 'react-native';
 import { purchaseTokens, getAppSettings, saveAppSettings } from './storage';
 import Constants from 'expo-constants';
+
+// react-native-purchases is native-only; import it only on iOS/Android to
+// avoid a crash on the web bundle where the native module doesn't exist.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let Purchases: any = null;
+if (Platform.OS !== 'web') {
+  Purchases = require('react-native-purchases').default;
+}
+
+// PurchasesOffering type is only used in type positions so it's safe to import
+// on all platforms (tree-shaken from web bundle by Metro).
+import type { PurchasesOffering } from 'react-native-purchases';
 
 const API_KEYS = {
   apple: "appl_YOUR_APPLE_KEY_HERE", // Replace when you deploy to iOS
@@ -9,6 +20,10 @@ const API_KEYS = {
 };
 
 export const configurePurchases = () => {
+  // IAP is not available on web; web users get 10 free scan tokens on first
+  // launch (see storage.web.ts DEFAULT_SETTINGS).
+  if (Platform.OS === 'web') return;
+
   if (Constants.appOwnership === 'expo') {
     console.log("Running in Expo Go: Bypassing RevenueCat native setup.");
     return;
@@ -25,6 +40,7 @@ export const configurePurchases = () => {
  * Entitlement checking for scan_tokens
  */
 export const checkScanEntitlement = async (): Promise<boolean> => {
+  if (Platform.OS === 'web') return false;
   if (Constants.appOwnership === 'expo') return true;
 
   try {
@@ -40,6 +56,8 @@ export const checkScanEntitlement = async (): Promise<boolean> => {
  * Fetch the current offerings (packs)
  */
 export const getScanPacks = async (): Promise<PurchasesOffering | null> => {
+  if (Platform.OS === 'web') return null;
+
   try {
     const offerings = await Purchases.getOfferings();
     return offerings.current;
@@ -53,6 +71,8 @@ export const getScanPacks = async (): Promise<PurchasesOffering | null> => {
  * Handle package purchase
  */
 export const purchaseScanPack = async (packageIdentifier: string): Promise<boolean> => {
+  if (Platform.OS === 'web') return false;
+
   try {
     const offerings = await Purchases.getOfferings();
     const pack = offerings.current?.availablePackages.find(p => p.identifier === packageIdentifier);
@@ -79,23 +99,50 @@ export const purchaseScanPack = async (packageIdentifier: string): Promise<boole
 };
 
 /**
- * Restore purchases and sync with local state
+ * Restore purchases and sync with local state.
+ * Computes the token balance directly from RevenueCat's transaction history,
+ * making this operation idempotent — calling it multiple times always produces
+ * the same correct result. Handles both Pro entitlements and consumable packs
+ * including promo codes redeemed via the Play Store.
  */
 export const restorePurchases = async (): Promise<boolean> => {
+  if (Platform.OS === 'web') return false;
   if (Constants.appOwnership === 'expo') return true;
 
   try {
     const customerInfo = await Purchases.restorePurchases();
-    
     const settings = await getAppSettings();
-    if (customerInfo.entitlements.active['pro'] || customerInfo.entitlements.active['scan_tokens']) {
-      // Sync entitlements to local state
-      settings.isPro = customerInfo.entitlements.active['pro'] !== undefined;
-      await saveAppSettings(settings);
-      return true;
+    let updated = false;
+
+    // 1. Restore Pro entitlement
+    if (customerInfo.entitlements.active['pro']) {
+      settings.isPro = true;
+      updated = true;
     }
-    return false;
-  } catch (e) {
+
+    // 2. Compute the authoritative token balance from RC transaction history.
+    // By summing all transactions and setting (not adding) the result, this is
+    // fully idempotent — repeated restores always produce the same balance.
+    const totalTokensFromRC = customerInfo.nonSubscriptionTransactions.reduce(
+      (sum, transaction) => {
+        if (transaction.productIdentifier === '10_scans_pack') return sum + 10;
+        if (transaction.productIdentifier === '50_scans') return sum + 50;
+        return sum;
+      },
+      0
+    );
+
+    if (totalTokensFromRC > 0) {
+      settings.scanTokens = totalTokensFromRC;
+      updated = true;
+    }
+
+    if (updated) {
+      await saveAppSettings(settings);
+    }
+
+    return updated;
+  } catch (e: any) {
     console.error("Failed to restore purchases", e);
     return false;
   }
@@ -105,6 +152,7 @@ export const restorePurchases = async (): Promise<boolean> => {
  * Handle customer info and synchronize local scan state
  */
 export const syncCustomerState = async () => {
+  if (Platform.OS === 'web') return;
   if (Constants.appOwnership === 'expo') return;
 
   try {
