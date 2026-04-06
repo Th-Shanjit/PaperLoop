@@ -1,18 +1,7 @@
+import Purchases, { PurchasesOffering } from 'react-native-purchases';
 import { Platform } from 'react-native';
 import { purchaseTokens, getAppSettings, saveAppSettings } from './storage';
 import Constants from 'expo-constants';
-
-// react-native-purchases is native-only; import it only on iOS/Android to
-// avoid a crash on the web bundle where the native module doesn't exist.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let Purchases: any = null;
-if (Platform.OS !== 'web') {
-  Purchases = require('react-native-purchases').default;
-}
-
-// PurchasesOffering type is only used in type positions so it's safe to import
-// on all platforms (tree-shaken from web bundle by Metro).
-import type { PurchasesOffering } from 'react-native-purchases';
 
 const API_KEYS = {
   apple: "appl_YOUR_APPLE_KEY_HERE", // Replace when you deploy to iOS
@@ -20,10 +9,6 @@ const API_KEYS = {
 };
 
 export const configurePurchases = () => {
-  // IAP is not available on web; web users get 10 free scan tokens on first
-  // launch (see storage.web.ts DEFAULT_SETTINGS).
-  if (Platform.OS === 'web') return;
-
   if (Constants.appOwnership === 'expo') {
     console.log("Running in Expo Go: Bypassing RevenueCat native setup.");
     return;
@@ -40,7 +25,6 @@ export const configurePurchases = () => {
  * Entitlement checking for scan_tokens
  */
 export const checkScanEntitlement = async (): Promise<boolean> => {
-  if (Platform.OS === 'web') return false;
   if (Constants.appOwnership === 'expo') return true;
 
   try {
@@ -56,8 +40,6 @@ export const checkScanEntitlement = async (): Promise<boolean> => {
  * Fetch the current offerings (packs)
  */
 export const getScanPacks = async (): Promise<PurchasesOffering | null> => {
-  if (Platform.OS === 'web') return null;
-
   try {
     const offerings = await Purchases.getOfferings();
     return offerings.current;
@@ -71,8 +53,6 @@ export const getScanPacks = async (): Promise<PurchasesOffering | null> => {
  * Handle package purchase
  */
 export const purchaseScanPack = async (packageIdentifier: string): Promise<boolean> => {
-  if (Platform.OS === 'web') return false;
-
   try {
     const offerings = await Purchases.getOfferings();
     const pack = offerings.current?.availablePackages.find(p => p.identifier === packageIdentifier);
@@ -106,7 +86,6 @@ export const purchaseScanPack = async (packageIdentifier: string): Promise<boole
  * including promo codes redeemed via the Play Store.
  */
 export const restorePurchases = async (): Promise<boolean> => {
-  if (Platform.OS === 'web') return false;
   if (Constants.appOwnership === 'expo') return true;
 
   try {
@@ -152,7 +131,6 @@ export const restorePurchases = async (): Promise<boolean> => {
  * Handle customer info and synchronize local scan state
  */
 export const syncCustomerState = async () => {
-  if (Platform.OS === 'web') return;
   if (Constants.appOwnership === 'expo') return;
 
   try {

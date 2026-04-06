@@ -1,0 +1,3 @@
+{"sessionId":"90597a","runId":"pre-fix","hypothesisId":"H4","location":"_layout.tsx:module","message":"layout loaded on web","data":{"platform":"web","windowW":1366},"timestamp":1775474551278}
+{"sessionId":"90597a","runId":"pre-fix","hypothesisId":"H1-H5","location":"camera.tsx:pickImage","message":"gallery images selected","data":{"platform":"web","count":1,"firstUriPrefix":"blob:http://localhost:8081/589"},"timestamp":1775474622169}
+{"sessionId":"90597a","runId":"pre-fix","hypothesisId":"H4","location":"_layout.tsx:module","message":"layout loaded on web","data":{"platform":"web","windowW":1366},"timestamp":1775482908523}

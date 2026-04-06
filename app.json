@@ -29,15 +29,7 @@
       "minify": true
     },
     "web": {
-      "favicon": "./assets/icon.png",
-      "name": "PaperLoop",
-      "shortName": "PaperLoop",
-      "description": "Build, scan, and export professional exam papers",
-      "themeColor": "#0066FF",
-      "backgroundColor": "#FFFFFF",
-      "display": "standalone",
-      "orientation": "portrait",
-      "bundler": "metro"
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-router",
